@@ -7,8 +7,15 @@ import gi
 gi.require_version("Gtk", "3.0")
 from gi.repository import Gtk
 
-from .config import load_playlists, save_playlists, APPLY_SCRIPT
+from .config import load_playlists, save_playlists, load_favorite_ids, APPLY_SCRIPT
 from .ui import labeled_frame, icon_button
+
+INTERVAL_PRESETS = [
+    ("15 min", 15),
+    ("30 min", 30),
+    ("1 hora", 60),
+    ("1 dia", 1440),
+]
 
 class PlaylistWindow(Gtk.Window):
     def __init__(self, monitors, all_items, on_saved=None):
@@ -43,6 +50,12 @@ class PlaylistWindow(Gtk.Window):
         adjustment = Gtk.Adjustment(value=30, lower=1, upper=1440, step_increment=1, page_increment=10)
         self.interval_spin = Gtk.SpinButton(adjustment=adjustment)
         top_box.pack_start(self.interval_spin, False, False, 0)
+
+        for label, minutes in INTERVAL_PRESETS:
+            preset_btn = Gtk.Button(label=label)
+            preset_btn.connect("clicked", lambda _b, m=minutes: self.interval_spin.set_value(m))
+            top_box.pack_start(preset_btn, False, False, 0)
+
         vbox.pack_start(top_frame, False, False, 0)
 
         lists_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
@@ -81,6 +94,17 @@ class PlaylistWindow(Gtk.Window):
         down_btn = icon_button("Bajar", "go-down-symbolic")
         down_btn.connect("clicked", self.on_move_down)
         mid_box.pack_start(down_btn, False, False, 0)
+
+        mid_box.pack_start(Gtk.Separator(), False, False, 8)
+
+        favorites_btn = icon_button("Rellenar con favoritos", "starred-symbolic")
+        favorites_btn.connect("clicked", self.on_fill_from_favorites)
+        mid_box.pack_start(favorites_btn, False, False, 0)
+
+        shuffle_btn = icon_button("Aleatorizar orden", "media-playlist-shuffle-symbolic")
+        shuffle_btn.connect("clicked", self.on_shuffle_clicked)
+        mid_box.pack_start(shuffle_btn, False, False, 0)
+
         lists_box.pack_start(mid_box, False, False, 0)
 
         playlist_vbox = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
@@ -179,6 +203,28 @@ class PlaylistWindow(Gtk.Window):
         next_iter = model.iter_next(iter_)
         if next_iter:
             model.move_after(iter_, next_iter)
+
+    def on_fill_from_favorites(self, button):
+        favorites = load_favorite_ids()
+        if not favorites:
+            self.status_label.set_text("No tienes ningun wallpaper marcado como favorito todavia")
+            return
+        existing = {row[1] for row in self.playlist_store}
+        added = 0
+        for wid in favorites:
+            if wid not in existing and wid in self.titles_by_id:
+                self.playlist_store.append([self.titles_by_id.get(wid, wid), wid])
+                added += 1
+        self.status_label.set_text(f"Anadidos {added} favoritos a la rotacion" if added else "Tus favoritos ya estaban todos en la rotacion")
+
+    def on_shuffle_clicked(self, button):
+        import random
+        rows = [(row[0], row[1]) for row in self.playlist_store]
+        random.shuffle(rows)
+        self.playlist_store.clear()
+        for title, wid in rows:
+            self.playlist_store.append([title, wid])
+        self.status_label.set_text("Orden aleatorizado")
 
     def on_save_clicked(self, button):
         self.stash_current_monitor()

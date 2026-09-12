@@ -14,12 +14,16 @@ CONF_DIR = os.path.expanduser("~/.config/wallpaperengine-picker")
 CONFIG_FILE = os.path.join(CONF_DIR, "config.json")
 CURRENT_FILE = os.path.join(CONF_DIR, "current.json")
 HIDDEN_FILE = os.path.join(CONF_DIR, "hidden.json")
+FAVORITES_FILE = os.path.join(CONF_DIR, "favorites.json")
+RECENTS_FILE = os.path.join(CONF_DIR, "recents.json")
+UI_STATE_FILE = os.path.join(CONF_DIR, "ui_state.json")
 PLAYLISTS_FILE = os.path.join(CONF_DIR, "playlists.json")
 KNOWN_BAD_FILE = os.path.join(CONF_DIR, "known_bad.json")
-CACHE_DIR = os.path.expanduser("~/.cache/wallpaperengine-picker/thumbs")
+MAX_RECENTS = 100
+CACHE_DIR = os.path.expanduser("~/.cache/wallpaperengine-picker/thumbs_v3")
 WORKSHOP_THUMB_CACHE = os.path.expanduser("~/.cache/wallpaperengine-picker/workshop_thumbs")
 APPLY_SCRIPT = os.path.expanduser("~/.local/bin/wallpaperengine-apply")
-THUMB_SIZE = (220, 130)
+THUMB_SIZE = (320, 180)  # 16:9 exacto; debe coincidir con CARD_SIZE en wpelib/ui.py
 DEFAULT_ID = "2168640648"
 STEAM_API_QUERYFILES = "https://api.steampowered.com/IPublishedFileService/QueryFiles/v1/"
 
@@ -149,6 +153,59 @@ def save_hidden_ids(ids):
         json.dump(sorted(ids), f, indent=2)
 
 
+def load_favorite_ids():
+    if os.path.isfile(FAVORITES_FILE):
+        try:
+            with open(FAVORITES_FILE, encoding="utf-8") as f:
+                return set(json.load(f))
+        except Exception:
+            return set()
+    return set()
+
+
+def save_favorite_ids(ids):
+    os.makedirs(CONF_DIR, exist_ok=True)
+    with open(FAVORITES_FILE, "w", encoding="utf-8") as f:
+        json.dump(sorted(ids), f, indent=2)
+
+
+def load_recent_ids():
+    """Devuelve los ids aplicados recientemente, mas reciente primero."""
+    if os.path.isfile(RECENTS_FILE):
+        try:
+            with open(RECENTS_FILE, encoding="utf-8") as f:
+                return json.load(f)
+        except Exception:
+            return []
+    return []
+
+
+def record_recent(wid):
+    recents = [r for r in load_recent_ids() if r != wid]
+    recents.insert(0, wid)
+    recents = recents[:MAX_RECENTS]
+    os.makedirs(CONF_DIR, exist_ok=True)
+    with open(RECENTS_FILE, "w", encoding="utf-8") as f:
+        json.dump(recents, f, indent=2)
+    return recents
+
+
+def load_ui_state():
+    if os.path.isfile(UI_STATE_FILE):
+        try:
+            with open(UI_STATE_FILE, encoding="utf-8") as f:
+                return json.load(f)
+        except Exception:
+            return {}
+    return {}
+
+
+def save_ui_state(state):
+    os.makedirs(CONF_DIR, exist_ok=True)
+    with open(UI_STATE_FILE, "w", encoding="utf-8") as f:
+        json.dump(state, f, indent=2)
+
+
 def load_playlists():
     if os.path.isfile(PLAYLISTS_FILE):
         try:
@@ -187,6 +244,11 @@ def unsubscribe_workshop_item(wid):
     if changed:
         save_playlists(playlists)
 
+    favorites = load_favorite_ids()
+    if wid in favorites:
+        favorites.discard(wid)
+        save_favorite_ids(favorites)
+
 
 def build_thumb(preview_path, dest_path):
     try:
@@ -204,7 +266,11 @@ def build_thumb(preview_path, dest_path):
 
 
 def load_wallpapers():
-    """Devuelve lista de dicts: id, title, thumb_path, tags (list), rating (str)."""
+    """Devuelve lista de dicts: id, title, thumb (ruta si ya esta en cache, si
+    no None), preview_path (para generar la miniatura mas tarde en segundo
+    plano), tags, rating, mtime, type. No genera miniaturas aqui (para no
+    bloquear la interfaz la primera vez que aparecen wallpapers nuevos);
+    eso lo hace el llamador con build_thumb() de forma progresiva."""
     items = []
     if not os.path.isdir(WORKSHOP_DIR):
         return items
@@ -220,14 +286,13 @@ def load_wallpapers():
             preview = data.get("preview", "")
             tags = data.get("tags", []) or []
             rating = data.get("contentrating", "Desconocido") or "Desconocido"
+            wtype = data.get("type", "Desconocido") or "Desconocido"
         except Exception:
-            title, preview, tags, rating = entry, "", [], "Desconocido"
+            title, preview, tags, rating, wtype = entry, "", [], "Desconocido", "Desconocido"
 
         thumb_path = os.path.join(CACHE_DIR, f"{entry}.png")
-        if not os.path.isfile(thumb_path):
-            preview_path = os.path.join(folder, preview) if preview else ""
-            if not (preview_path and os.path.isfile(preview_path) and build_thumb(preview_path, thumb_path)):
-                thumb_path = None
+        has_cached_thumb = os.path.isfile(thumb_path)
+        preview_path = os.path.join(folder, preview) if preview else ""
 
         try:
             mtime = os.path.getmtime(folder)
@@ -235,8 +300,10 @@ def load_wallpapers():
             mtime = 0
 
         items.append({
-            "id": entry, "title": title, "thumb": thumb_path, "tags": tags,
-            "rating": rating, "mtime": mtime,
+            "id": entry, "title": title,
+            "thumb": thumb_path if has_cached_thumb else None,
+            "preview_path": preview_path if os.path.isfile(preview_path) else None,
+            "tags": tags, "rating": rating, "mtime": mtime, "type": wtype,
         })
     items.sort(key=lambda r: r["title"].lower())
     return items
