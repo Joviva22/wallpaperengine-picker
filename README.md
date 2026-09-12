@@ -146,17 +146,21 @@ Todo el estado vive en `~/.config/wallpaperengine-picker/`:
   la deteccion automatica elige la que no es.
 - `current.json`: ultima asignacion aplicada, `{ "NOMBRE_PANTALLA": "id_wallpaper", ... }`.
   Es lo que usa el autostart para restaurar tu configuracion al iniciar sesion.
-- `wallpaperengine.log`: salida de `linux-wallpaperengine` (util para depurar wallpapers que
-  no cargan bien).
+- `wallpaperengine_PANTALLA.log` y `pid_PANTALLA.pid` (uno por cada monitor): salida y PID del
+  proceso `linux-wallpaperengine` de esa pantalla (util para ver por que un wallpaper concreto
+  no carga o hace crashear el motor).
 
 Las miniaturas se cachean en `~/.cache/wallpaperengine-picker/` (se pueden borrar sin
 problema, se regeneran solas).
 
 ## Notas y limitaciones
 
-- Multi-monitor funciona lanzando un unico proceso `linux-wallpaperengine` con varios pares
-  `--screen-root PANTALLA --bg RUTA`; cambiar el wallpaper de una pantalla reinicia el
-  proceso completo (breve parpadeo en todas las pantallas).
+- Cada pantalla corre en su **propio proceso** `linux-wallpaperengine` (PID guardado en
+  `~/.config/wallpaperengine-picker/pid_PANTALLA.pid`, log en `wallpaperengine_PANTALLA.log`).
+  Esto aisla los fallos: algunas escenas del Workshop hacen crashear el motor (excepciones
+  C++ no capturadas al parsear un `scene.json` incompatible); con procesos separados, solo se
+  cae la pantalla afectada y las demas siguen funcionando. Cambiar el wallpaper de una
+  pantalla solo reinicia el proceso de esa pantalla, sin tocar las demas.
 - El escalado se fija en `fill` + `clamp border`, que suele evitar bordes negros o
   estiramientos raros en la mayoria de resoluciones. Si un wallpaper en concreto se ve mal,
   puede deberse a que la escena en si no esta pensada para tu resolucion/aspecto.

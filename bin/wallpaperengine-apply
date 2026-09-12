@@ -1,5 +1,7 @@
 #!/usr/bin/env bash
-# Aplica wallpapers de Wallpaper Engine, uno por pantalla.
+# Aplica wallpapers de Wallpaper Engine, uno por pantalla, cada uno en su PROPIO proceso
+# de linux-wallpaperengine. Asi, si el motor crashea al renderizar un wallpaper concreto
+# (ocurre con algunas escenas rotas/incompatibles), solo se cae esa pantalla y no las demas.
 # Uso: wallpaperengine-apply PANTALLA=ID [PANTALLA=ID ...]
 set -euo pipefail
 
@@ -11,7 +13,6 @@ WORKSHOP_DIR="$STEAM_LIB/steamapps/workshop/content/$WPE_APPID"
 ASSETS_DIR="$STEAM_LIB/steamapps/common/wallpaper_engine/assets"
 CONF_DIR="$WPE_CONF_DIR"
 CURRENT_FILE="$CONF_DIR/current.json"
-LOG_FILE="$CONF_DIR/wallpaperengine.log"
 
 if [[ $# -eq 0 ]]; then
     echo "Uso: wallpaperengine-apply PANTALLA=ID [PANTALLA=ID ...]" >&2
@@ -21,6 +22,14 @@ fi
 mkdir -p "$CONF_DIR"
 
 declare -A ASSIGN
+# Partimos de lo que ya estaba guardado, para no perder la configuracion de pantallas
+# que no se mencionan en esta llamada.
+if [[ -f "$CURRENT_FILE" ]]; then
+    while IFS=$'\t' read -r screen id; do
+        [[ -n "$screen" ]] && ASSIGN["$screen"]="$id"
+    done < <(jq -r 'to_entries[] | "\(.key)\t\(.value)"' "$CURRENT_FILE" 2>/dev/null)
+fi
+
 for pair in "$@"; do
     screen="${pair%%=*}"
     id="${pair#*=}"
@@ -35,20 +44,37 @@ for pair in "$@"; do
     ASSIGN["$screen"]="$id"
 done
 
-pkill -f linux-wallpaperengine 2>/dev/null || true
-sleep 0.5
+restart_screen() {
+    local screen="$1" id="$2"
+    local pidfile="$CONF_DIR/pid_${screen}.pid"
+    local logfile="$CONF_DIR/wallpaperengine_${screen}.log"
 
-args=(--assets-dir "$ASSETS_DIR" --fps 30 --silent)
-for screen in "${!ASSIGN[@]}"; do
-    args+=(--screen-root "$screen" --bg "$WORKSHOP_DIR/${ASSIGN[$screen]}" --scaling fill --clamp border)
+    if [[ -f "$pidfile" ]]; then
+        local old_pid
+        old_pid=$(cat "$pidfile" 2>/dev/null || true)
+        if [[ -n "$old_pid" ]] && kill -0 "$old_pid" 2>/dev/null; then
+            kill "$old_pid" 2>/dev/null || true
+            sleep 0.3
+            kill -0 "$old_pid" 2>/dev/null && kill -9 "$old_pid" 2>/dev/null || true
+        fi
+    fi
+
+    nohup linux-wallpaperengine --assets-dir "$ASSETS_DIR" --fps 30 --silent \
+        --screen-root "$screen" --bg "$WORKSHOP_DIR/$id" --scaling fill --clamp border \
+        >>"$logfile" 2>&1 &
+    echo $! > "$pidfile"
+    disown
+}
+
+for pair in "$@"; do
+    screen="${pair%%=*}"
+    id="${pair#*=}"
+    restart_screen "$screen" "$id"
+    echo "  $screen -> $id"
 done
 
-nohup linux-wallpaperengine "${args[@]}" >>"$LOG_FILE" 2>&1 &
-disown
-
-echo '{}' > "$CURRENT_FILE"
+tmp=$(jq -n '{}')
 for screen in "${!ASSIGN[@]}"; do
-    tmp=$(jq --arg k "$screen" --arg v "${ASSIGN[$screen]}" '. + {($k): $v}' "$CURRENT_FILE")
-    echo "$tmp" > "$CURRENT_FILE"
-    echo "  $screen -> ${ASSIGN[$screen]}"
+    tmp=$(echo "$tmp" | jq --arg k "$screen" --arg v "${ASSIGN[$screen]}" '. + {($k): $v}')
 done
+echo "$tmp" > "$CURRENT_FILE"

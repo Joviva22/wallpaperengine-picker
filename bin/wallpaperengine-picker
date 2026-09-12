@@ -900,8 +900,9 @@ class PickerWindow(Gtk.Window):
     def assign_and_apply(self, wid):
         self.assignments[self.target_monitor] = wid
         self.update_monitor_label(self.target_monitor)
-        pairs = [f"{mon}={vid}" for mon, vid in self.assignments.items()]
-        subprocess.Popen([APPLY_SCRIPT, *pairs])
+        # Solo se reinicia el proceso de la pantalla que cambio; las demas siguen
+        # corriendo sin interrupcion (cada pantalla es un proceso independiente).
+        subprocess.Popen([APPLY_SCRIPT, f"{self.target_monitor}={wid}"])
         self.status_label.set_text(f"Aplicando en {self.target_monitor}: {self.titles_by_id.get(wid, wid)}")
 
     def on_item_activated(self, icon_view, path):
