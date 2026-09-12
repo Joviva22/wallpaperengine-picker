@@ -49,9 +49,23 @@ KNOWN_BAD_FILE="$CONF_DIR/known_bad.json"
 # Espera un poco tras lanzar un wallpaper y comprueba si el proceso murio con una
 # excepcion/crash tipico del motor; si es asi, lo apunta en known_bad.json para que
 # la app lo marque en la lista. Si sigue vivo y antes estaba marcado, lo desmarca solo.
+#
+# Dos cuidados para no generar falsos positivos al cambiar de wallpaper rapido:
+# 1. Si mientras esperabamos ya se lanzo OTRO wallpaper en esa pantalla (el pidfile
+#    ya no apunta a nuestro pid), no fue un crash sino un cambio deliberado: no tocamos nada.
+# 2. Solo miramos las lineas del log posteriores al momento en que lanzamos ESTE
+#    proceso, para no confundir el crash de un wallpaper anterior/posterior con el
+#    nuestro (el log de cada pantalla se comparte entre todos sus lanzamientos).
 watch_for_crash() {
-    local screen="$1" id="$2" pid="$3" logfile="$4"
+    local screen="$1" id="$2" pid="$3" logfile="$4" log_start_lines="$5"
     sleep 8
+
+    local pidfile="$CONF_DIR/pid_${screen}.pid"
+    local current_pid
+    current_pid=$(cat "$pidfile" 2>/dev/null || true)
+    if [[ "$current_pid" != "$pid" ]]; then
+        return
+    fi
 
     local current="{}"
     [[ -s "$KNOWN_BAD_FILE" ]] && current=$(cat "$KNOWN_BAD_FILE")
@@ -61,7 +75,8 @@ watch_for_crash() {
         return
     fi
 
-    if grep -qE "terminate called|Segmentation fault|Aborted \(core dumped\)" "$logfile" 2>/dev/null; then
+    if tail -n "+$((log_start_lines + 1))" "$logfile" 2>/dev/null | \
+        grep -qE "terminate called|Segmentation fault|Aborted \(core dumped\)"; then
         echo "$current" | jq --arg id "$id" --arg screen "$screen" --arg ts "$(date -Iseconds)" \
             '.[$id] = {screen: $screen, detected_at: $ts}' > "$KNOWN_BAD_FILE" 2>/dev/null || true
     fi
@@ -82,6 +97,9 @@ restart_screen() {
         fi
     fi
 
+    local log_start_lines=0
+    [[ -f "$logfile" ]] && log_start_lines=$(wc -l < "$logfile")
+
     nohup linux-wallpaperengine --assets-dir "$ASSETS_DIR" --fps 30 --silent \
         --screen-root "$screen" --bg "$WORKSHOP_DIR/$id" --scaling fill --clamp border \
         >>"$logfile" 2>&1 &
@@ -89,7 +107,7 @@ restart_screen() {
     echo "$new_pid" > "$pidfile"
     disown
 
-    ( watch_for_crash "$screen" "$id" "$new_pid" "$logfile" ) &
+    ( watch_for_crash "$screen" "$id" "$new_pid" "$logfile" "$log_start_lines" ) &
     disown
 }
 
