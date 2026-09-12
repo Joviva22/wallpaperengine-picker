@@ -32,6 +32,7 @@ ln -sf "$REPO_DIR/bin/wallpaperengine-apply" "$BIN_DIR/wallpaperengine-apply"
 ln -sf "$REPO_DIR/bin/wallpaperengine-picker" "$BIN_DIR/wallpaperengine-picker"
 ln -sf "$REPO_DIR/bin/wallpaperengine-rotate" "$BIN_DIR/wallpaperengine-rotate"
 ln -sf "$REPO_DIR/bin/wallpaperengine-tray" "$BIN_DIR/wallpaperengine-tray"
+ln -sf "$REPO_DIR/bin/wallpaperengine-autostart" "$BIN_DIR/wallpaperengine-autostart"
 
 if ! python3 -c "import gi; gi.require_version('AyatanaAppIndicator3','0.1')" 2>/dev/null \
    && ! python3 -c "import gi; gi.require_version('AppIndicator3','0.1')" 2>/dev/null; then
@@ -55,7 +56,7 @@ cat > "$AUTOSTART_DIR/wallpaperengine-autostart.desktop" <<EOF
 Type=Application
 Name=Wallpaper Engine Autostart
 Comment=Aplica los ultimos fondos animados seleccionados (por pantalla) al iniciar sesion
-Exec=/bin/bash -c 'sleep 5; f="\$HOME/.config/wallpaperengine-picker/current.json"; if [[ -s "\$f" ]]; then mapfile -t pairs < <(jq -r "to_entries[] | \\"\\(.key)=\\(.value)\\"" "\$f"); "$BIN_DIR/wallpaperengine-apply" "\${pairs[@]}"; fi'
+Exec=$BIN_DIR/wallpaperengine-autostart
 Icon=preferences-desktop-wallpaper
 X-KDE-autostart-phase=2
 Terminal=false

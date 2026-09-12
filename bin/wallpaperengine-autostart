@@ -1,0 +1,22 @@
+#!/usr/bin/env bash
+# Punto de entrada del autostart de KDE: espera un poco a que el escritorio este
+# listo y reaplica la ultima configuracion guardada (un wallpaper por pantalla).
+#
+# Vive en su propio script (en vez de un one-liner dentro del Exec= del .desktop)
+# porque los archivos .desktop tienen reglas de escapado muy limitadas: un jq con
+# comillas anidadas ahi dentro provoca "Undefined escape sequence" y systemd
+# directamente descarta el autostart entero sin avisar en ningun sitio visible.
+set -uo pipefail
+
+sleep 5
+
+SCRIPT_DIR=$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)
+CONF_DIR="$HOME/.config/wallpaperengine-picker"
+CURRENT_FILE="$CONF_DIR/current.json"
+
+if [[ -s "$CURRENT_FILE" ]]; then
+    mapfile -t pairs < <(jq -r 'to_entries[] | "\(.key)=\(.value)"' "$CURRENT_FILE")
+    if [[ ${#pairs[@]} -gt 0 ]]; then
+        "$SCRIPT_DIR/wallpaperengine-apply" "${pairs[@]}"
+    fi
+fi
