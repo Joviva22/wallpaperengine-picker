@@ -292,6 +292,39 @@ def steam_api_search(api_key, search_text, required_tags=None, query_type=0, day
     return response.get("total", 0), response.get("publishedfiledetails", [])
 
 
+def steam_api_search_multi(api_key, search_text, required_tags, ratings, query_type=0, days=None, page=1, per_page=50):
+    """Etiquetas: deben estar TODAS presentes (AND). Clasificaciones: basta con UNA (OR) -
+    como un item solo tiene una clasificacion, combinarlas exige una llamada por cada una
+    (maximo 3) y fusionar resultados, ya que la API no soporta AND-de-ORes en una sola query."""
+    required_tags = list(required_tags or [])
+    ratings = list(ratings or [])
+
+    if len(ratings) <= 1:
+        combined = required_tags + ratings
+        return steam_api_search(
+            api_key, search_text, required_tags=combined,
+            query_type=query_type, days=days, page=page, per_page=per_page,
+        )
+
+    per_rating = max(1, per_page // len(ratings))
+    total_sum = 0
+    merged = []
+    seen_ids = set()
+    for rating in ratings:
+        combined = required_tags + [rating]
+        t, items = steam_api_search(
+            api_key, search_text, required_tags=combined,
+            query_type=query_type, days=days, page=page, per_page=per_rating,
+        )
+        total_sum += t
+        for item in items:
+            wid = item.get("publishedfileid")
+            if wid and wid not in seen_ids:
+                seen_ids.add(wid)
+                merged.append(item)
+    return total_sum, merged
+
+
 def download_workshop_thumb(wid, url):
     dest = os.path.join(WORKSHOP_THUMB_CACHE, f"{wid}.png")
     if os.path.isfile(dest):
@@ -550,6 +583,56 @@ def icon_button(label, icon_name):
     return btn
 
 
+class CheckListButton(Gtk.MenuButton):
+    """Boton desplegable con checkboxes para elegir varias opciones a la vez."""
+
+    def __init__(self, title, options, on_change=None, initially_checked=None):
+        super().__init__()
+        self.title = title
+        self.on_change = on_change
+        self.checks = {}
+
+        self.box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
+        self.box.set_border_width(8)
+        popover = Gtk.Popover()
+        popover.add(self.box)
+        self.set_popover(popover)
+
+        self.set_options(options, checked=initially_checked)
+
+    def set_options(self, options, checked=None):
+        preserve = set(checked) if checked is not None else set(self.get_selected())
+        for child in list(self.box.get_children()):
+            self.box.remove(child)
+        self.checks = {}
+        for opt in options:
+            cb = Gtk.CheckButton(label=opt)
+            cb.set_active(opt in preserve)
+            cb.connect("toggled", self._on_toggled)
+            self.box.pack_start(cb, False, False, 0)
+            self.checks[opt] = cb
+        self.box.show_all()
+        self._update_label()
+
+    def _on_toggled(self, cb):
+        self._update_label()
+        if self.on_change:
+            self.on_change()
+
+    def _update_label(self):
+        selected = self.get_selected()
+        if not selected:
+            text = f"{self.title}: Todas"
+        elif len(selected) <= 2:
+            text = f"{self.title}: {', '.join(selected)}"
+        else:
+            text = f"{self.title}: {len(selected)} seleccionadas"
+        self.set_label(text)
+
+    def get_selected(self):
+        return [opt for opt, cb in self.checks.items() if cb.get_active()]
+
+
 # ---------------------------------------------------------------------------
 # Ventana de busqueda/descarga del Workshop
 # ---------------------------------------------------------------------------
@@ -585,21 +668,11 @@ class WorkshopBrowserWindow(Gtk.Window):
         self.search_entry.connect("activate", self.on_search_clicked)
         search_box.pack_start(self.search_entry, True, True, 0)
 
-        search_box.pack_start(Gtk.Label(label="Etiqueta:"), False, False, 0)
-        self.tag_combo = Gtk.ComboBoxText()
-        self.tag_combo.append_text("Todas")
-        for tag in KNOWN_TAGS:
-            self.tag_combo.append_text(tag)
-        self.tag_combo.set_active(0)
-        search_box.pack_start(self.tag_combo, False, False, 0)
+        self.tag_filter = CheckListButton("Etiquetas", KNOWN_TAGS)
+        search_box.pack_start(self.tag_filter, False, False, 0)
 
-        search_box.pack_start(Gtk.Label(label="Clasificacion:"), False, False, 0)
-        self.rating_combo = Gtk.ComboBoxText()
-        self.rating_combo.append_text("Todas")
-        for rating in RATING_TAGS:
-            self.rating_combo.append_text(rating)
-        self.rating_combo.set_active(1)  # "Everyone" por defecto (apto para todos los publicos)
-        search_box.pack_start(self.rating_combo, False, False, 0)
+        self.rating_filter = CheckListButton("Clasificacion", RATING_TAGS, initially_checked=["Everyone"])
+        search_box.pack_start(self.rating_filter, False, False, 0)
 
         search_box.pack_start(Gtk.Label(label="Popularidad:"), False, False, 0)
         self.popularity_combo = Gtk.ComboBoxText()
@@ -703,9 +776,8 @@ class WorkshopBrowserWindow(Gtk.Window):
             self.status_label.set_text("Necesitas una API key para buscar en el Workshop.")
             return
         query = self.search_entry.get_text().strip()
-        tag_choice = self.tag_combo.get_active_text()
-        rating_choice = self.rating_combo.get_active_text()
-        required_tags = [t for t in (tag_choice, rating_choice) if t and t != "Todas"]
+        required_tags = self.tag_filter.get_selected()
+        ratings = self.rating_filter.get_selected()
         popularity_choice = self.popularity_combo.get_active_text()
         query_type, days = POPULARITY_OPTIONS.get(popularity_choice, (0, None))
         if query and popularity_choice != "Mas votados (todo el tiempo)":
@@ -713,7 +785,7 @@ class WorkshopBrowserWindow(Gtk.Window):
 
         self.last_search = {
             "api_key": api_key, "query": query, "required_tags": required_tags,
-            "query_type": query_type, "days": days,
+            "ratings": ratings, "query_type": query_type, "days": days,
         }
         self.run_search(page=1)
 
@@ -732,9 +804,9 @@ class WorkshopBrowserWindow(Gtk.Window):
 
     def _search_thread(self, params, page):
         try:
-            total, results = steam_api_search(
+            total, results = steam_api_search_multi(
                 params["api_key"], params["query"],
-                required_tags=params["required_tags"],
+                required_tags=params["required_tags"], ratings=params["ratings"],
                 query_type=params["query_type"], days=params["days"],
                 page=page, per_page=self.per_page,
             )
@@ -1098,20 +1170,14 @@ class PickerWindow(Gtk.Window):
         self.search_entry.connect("search-changed", self.refilter)
         filter_box.pack_start(self.search_entry, True, True, 0)
 
-        filter_box.pack_start(Gtk.Label(label="Etiqueta:"), False, False, 0)
-        self.tag_combo = Gtk.ComboBoxText()
-        self.tag_combo.append_text("Todas")
-        self.tag_combo.set_active(0)
-        self.tag_combo.connect("changed", self.refilter)
-        filter_box.pack_start(self.tag_combo, False, False, 0)
+        self.tag_filter = CheckListButton("Etiquetas", [], on_change=self.refilter)
+        filter_box.pack_start(self.tag_filter, False, False, 0)
 
-        filter_box.pack_start(Gtk.Label(label="Clasificacion:"), False, False, 0)
-        self.rating_combo = Gtk.ComboBoxText()
-        for r in ["Todas", "Everyone", "Questionable", "Mature", "Desconocido"]:
-            self.rating_combo.append_text(r)
-        self.rating_combo.set_active(1)  # "Everyone" por defecto (apto para todos los publicos)
-        self.rating_combo.connect("changed", self.refilter)
-        filter_box.pack_start(self.rating_combo, False, False, 0)
+        self.rating_filter = CheckListButton(
+            "Clasificacion", ["Everyone", "Questionable", "Mature", "Desconocido"],
+            on_change=self.refilter, initially_checked=["Everyone"],
+        )
+        filter_box.pack_start(self.rating_filter, False, False, 0)
 
         filter_box.pack_start(Gtk.Label(label="Ordenar por:"), False, False, 0)
         self.sort_combo = Gtk.ComboBoxText()
@@ -1223,8 +1289,7 @@ class PickerWindow(Gtk.Window):
             else:
                 item["pixbuf"] = self.placeholder_pixbuf
 
-        for tag in sorted(all_tags, key=str.lower):
-            self.tag_combo.append_text(tag)
+        self.tag_filter.set_options(sorted(all_tags, key=str.lower))
 
         for mon in self.monitors:
             self.update_monitor_label(mon)
@@ -1260,15 +1325,15 @@ class PickerWindow(Gtk.Window):
         if query and query not in (model[iter_][1] or "").lower():
             return False
 
-        tag_choice = self.tag_combo.get_active_text()
-        if tag_choice and tag_choice != "Todas":
-            if tag_choice not in self.tags_by_id.get(wid, []):
+        selected_tags = self.tag_filter.get_selected()
+        if selected_tags:
+            item_tags = self.tags_by_id.get(wid, [])
+            if not all(t in item_tags for t in selected_tags):
                 return False
 
-        rating_choice = self.rating_combo.get_active_text()
-        if rating_choice and rating_choice != "Todas":
-            if self.rating_by_id.get(wid) != rating_choice:
-                return False
+        selected_ratings = self.rating_filter.get_selected()
+        if selected_ratings and self.rating_by_id.get(wid) not in selected_ratings:
+            return False
 
         return True
 
@@ -1347,27 +1412,16 @@ class PickerWindow(Gtk.Window):
         else:
             self.playlist_window.present()
 
-    def _restore_tag_selection(self, previous_text):
-        model = self.tag_combo.get_model()
-        for i, row in enumerate(model):
-            if row[0] == previous_text:
-                self.tag_combo.set_active(i)
-                return
-        self.tag_combo.set_active(0)
-
     def on_refresh_clicked(self, *args):
-        previous_tag = self.tag_combo.get_active_text()
         self.status_label.set_text("Actualizando lista de wallpapers...")
 
         self.store.clear()
         self.titles_by_id.clear()
         self.tags_by_id.clear()
         self.rating_by_id.clear()
-        self.tag_combo.remove_all()
-        self.tag_combo.append_text("Todas")
 
+        # set_options() en populate() preserva las etiquetas ya marcadas.
         self.populate()
-        self._restore_tag_selection(previous_tag)
         self.refilter()
 
 
