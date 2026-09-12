@@ -278,6 +278,10 @@ def download_workshop_thumb(wid, url):
         return None
 
 
+def is_already_downloaded(wid):
+    return os.path.isfile(os.path.join(WORKSHOP_DIR, wid, "project.json"))
+
+
 def verify_workshop_download(wid):
     """Comprueba en disco que el wallpaper realmente quedo instalado, en vez de
     fiarse solo del texto que imprime steamcmd. Devuelve (ok, detalle)."""
@@ -541,7 +545,9 @@ class WorkshopBrowserWindow(Gtk.Window):
                         pixbuf = GdkPixbuf.Pixbuf.new_from_file(thumb_path)
                     except Exception:
                         pixbuf = self.placeholder_pixbuf
-            self.store.append([pixbuf, title, wid])
+
+            display_title = f"[Ya la tienes] {title}" if is_already_downloaded(wid) else title
+            self.store.append([pixbuf, display_title, wid])
 
         total_pages = max(1, -(-total // self.per_page)) if total else 1
         self.page_label.set_text(f"Pagina {page} de {total_pages} ({total} resultados)")
@@ -604,11 +610,7 @@ class WorkshopBrowserWindow(Gtk.Window):
             reason = "steamcmd no confirmo la descarga (revisa el log)" if not steamcmd_ok else detail
             self.status_label.set_markup(f"<span foreground='#e74c3c'>Fallo la descarga: {GLib.markup_escape_text(title)}</span>")
             self.append_log(f"--- Descarga fallida o no verificada: {reason} ---\n")
-            self.show_result_dialog(
-                Gtk.MessageType.ERROR, "La descarga no se pudo confirmar",
-                f"'{title}' no aparece instalado tras la descarga.\n\nMotivo: {reason}\n\n"
-                "Puedes reintentar, o suscribirte desde el propio Steam como alternativa.",
-            )
+            self.show_failed_download_dialog(wid, title, reason)
         return False
 
     def show_result_dialog(self, message_type, title, text):
@@ -619,6 +621,29 @@ class WorkshopBrowserWindow(Gtk.Window):
         dialog.format_secondary_text(text)
         dialog.run()
         dialog.destroy()
+
+    def show_failed_download_dialog(self, wid, title, reason):
+        dialog = Gtk.MessageDialog(
+            transient_for=self, modal=True, message_type=Gtk.MessageType.ERROR,
+            text="La descarga no se pudo confirmar",
+        )
+        dialog.format_secondary_text(
+            f"'{title}' no aparece instalado tras la descarga.\n\nMotivo: {reason}\n\n"
+            "steamcmd con login anonimo a veces no puede descargar un item concreto (por ejemplo "
+            "si necesita tu cuenta real). Puedes abrirlo en Steam y suscribirte ahi en su lugar."
+        )
+        dialog.add_buttons(
+            "Abrir en Steam", Gtk.ResponseType.APPLY,
+            Gtk.STOCK_CLOSE, Gtk.ResponseType.CLOSE,
+        )
+        response = dialog.run()
+        dialog.destroy()
+        if response == Gtk.ResponseType.APPLY:
+            try:
+                subprocess.Popen(["xdg-open", f"steam://url/CommunityFilePage/{wid}"])
+            except Exception:
+                subprocess.Popen(["xdg-open", f"https://steamcommunity.com/sharedfiles/filedetails/?id={wid}"])
+            self.status_label.set_text("Abriendo el item en Steam. Suscribete y luego pulsa 'Refrescar lista' en la ventana principal.")
 
 
 # ---------------------------------------------------------------------------
