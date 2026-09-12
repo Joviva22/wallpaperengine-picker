@@ -25,6 +25,7 @@ from .workshop_window import WorkshopBrowserWindow
 from .playlist_window import PlaylistWindow
 
 TABS = ["Todos", "Favoritos", "Recientes", "Animados", "Ocultos"]
+COLUMN_OPTIONS = ["Auto", "2", "3", "4", "5", "6", "7", "8"]
 TAB_LABELS = {
     "Todos": "Biblioteca", "Favoritos": "Favoritos", "Recientes": "Recientes",
     "Animados": "Animados", "Ocultos": "Ocultos",
@@ -174,7 +175,6 @@ class PickerWindow(Gtk.Window):
 
         self.flowbox = Gtk.FlowBox()
         self.flowbox.set_valign(Gtk.Align.START)
-        self.flowbox.set_max_children_per_line(30)
         self.flowbox.set_selection_mode(Gtk.SelectionMode.MULTIPLE)
         self.flowbox.set_activate_on_single_click(False)
         self.flowbox.set_row_spacing(14)
@@ -183,6 +183,7 @@ class PickerWindow(Gtk.Window):
         self.flowbox.set_filter_func(self._filter_func)
         self.flowbox.set_sort_func(self._sort_func)
         self.flowbox.connect("selected-children-changed", self.on_selection_changed)
+        self._apply_column_setting()
 
         scrolled = Gtk.ScrolledWindow()
         scrolled.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
@@ -279,6 +280,15 @@ class PickerWindow(Gtk.Window):
         self.sort_combo.set_active(sort_options_list.index(saved_sort) if saved_sort in sort_options_list else 0)
         self.sort_combo.connect("changed", self.on_sort_changed)
         header_box.pack_start(self.sort_combo, False, False, 0)
+
+        header_box.pack_start(Gtk.Label(label="Columnas:"), False, False, 0)
+        self.columns_combo = Gtk.ComboBoxText()
+        for option in COLUMN_OPTIONS:
+            self.columns_combo.append_text(option)
+        saved_columns = ui_state.get("columns", "Auto")
+        self.columns_combo.set_active(COLUMN_OPTIONS.index(saved_columns) if saved_columns in COLUMN_OPTIONS else 0)
+        self.columns_combo.connect("changed", self.on_columns_changed)
+        header_box.pack_start(self.columns_combo, False, False, 0)
 
         return header_box
 
@@ -599,6 +609,20 @@ class PickerWindow(Gtk.Window):
 
     def on_sort_changed(self, combo):
         self.flowbox.invalidate_sort()
+        self.save_current_ui_state()
+
+    def _apply_column_setting(self):
+        choice = self.columns_combo.get_active_text() or "Auto"
+        if choice == "Auto":
+            self.flowbox.set_min_children_per_line(1)
+            self.flowbox.set_max_children_per_line(30)
+        else:
+            n = int(choice)
+            self.flowbox.set_min_children_per_line(n)
+            self.flowbox.set_max_children_per_line(n)
+
+    def on_columns_changed(self, combo):
+        self._apply_column_setting()
         self.save_current_ui_state()
 
     def on_tab_toggled(self, btn, label):
@@ -1021,6 +1045,7 @@ class PickerWindow(Gtk.Window):
             "sort": self.sort_combo.get_active_text(),
             "ratings": self.filters_btn.get_selected_ratings(),
             "target_monitor": self.target_monitor,
+            "columns": self.columns_combo.get_active_text(),
         })
 
     def on_destroy(self, widget):
