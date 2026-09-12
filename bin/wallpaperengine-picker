@@ -169,9 +169,26 @@ def load_wallpapers():
             if not (preview_path and os.path.isfile(preview_path) and build_thumb(preview_path, thumb_path)):
                 thumb_path = None
 
-        items.append({"id": entry, "title": title, "thumb": thumb_path, "tags": tags, "rating": rating})
+        try:
+            mtime = os.path.getmtime(folder)
+        except OSError:
+            mtime = 0
+
+        items.append({
+            "id": entry, "title": title, "thumb": thumb_path, "tags": tags,
+            "rating": rating, "mtime": mtime,
+        })
     items.sort(key=lambda r: r["title"].lower())
     return items
+
+
+SORT_OPTIONS = {
+    "Titulo (A-Z)": lambda item: item["title"].lower(),
+    "Titulo (Z-A)": lambda item: item["title"].lower(),
+    "Mas reciente primero": lambda item: -item["mtime"],
+    "Mas antiguo primero": lambda item: item["mtime"],
+}
+SORT_REVERSE = {"Titulo (Z-A)": True}
 
 
 # ---------------------------------------------------------------------------
@@ -192,9 +209,20 @@ KNOWN_TAGS = [
 ]
 RATING_TAGS = ["Everyone", "Questionable", "Mature"]
 
+# Ventanas de tiempo para "mas popular en..." (k_PublishedFileQueryType_RankedByTrend = 3),
+# igual que el filtro "Popular esta semana/mes/..." de la pagina web del Workshop.
+POPULARITY_OPTIONS = {
+    "Mas votados (todo el tiempo)": (0, None),
+    "Popular hoy": (3, 1),
+    "Popular esta semana": (3, 7),
+    "Popular este mes": (3, 30),
+    "Popular este año": (3, 365),
+}
 
-def steam_api_search(api_key, search_text, required_tag=None, page=1, per_page=50):
-    query_type = 12 if search_text else 0  # 12 = RankedByTextSearch, 0 = RankedByVote
+
+def steam_api_search(api_key, search_text, required_tag=None, query_type=0, days=None, page=1, per_page=50):
+    if search_text:
+        query_type = 12  # RankedByTextSearch tiene prioridad sobre la popularidad elegida
     params = {
         "key": api_key,
         "appid": APPID,
@@ -210,6 +238,8 @@ def steam_api_search(api_key, search_text, required_tag=None, page=1, per_page=5
         params["search_text"] = search_text
     if required_tag:
         params["requiredtags[0]"] = required_tag
+    if days:
+        params["days"] = str(days)
 
     url = STEAM_API_QUERYFILES + "?" + urllib.parse.urlencode(params)
     try:
@@ -308,6 +338,13 @@ class WorkshopBrowserWindow(Gtk.Window):
         self.rating_combo.connect("changed", self.on_rating_filter_changed)
         search_box.pack_start(self.rating_combo, False, False, 0)
 
+        search_box.pack_start(Gtk.Label(label="Popularidad:"), False, False, 0)
+        self.popularity_combo = Gtk.ComboBoxText()
+        for option in POPULARITY_OPTIONS:
+            self.popularity_combo.append_text(option)
+        self.popularity_combo.set_active(0)
+        search_box.pack_start(self.popularity_combo, False, False, 0)
+
         search_btn = Gtk.Button(label="Buscar")
         search_btn.connect("clicked", self.on_search_clicked)
         search_box.pack_start(search_btn, False, False, 0)
@@ -381,15 +418,24 @@ class WorkshopBrowserWindow(Gtk.Window):
         query = self.search_entry.get_text().strip()
         tag_choice = self.tag_combo.get_active_text()
         required_tag = tag_choice if tag_choice and tag_choice != "Todas" else None
-        self.status_label.set_text("Buscando...")
+        popularity_choice = self.popularity_combo.get_active_text()
+        query_type, days = POPULARITY_OPTIONS.get(popularity_choice, (0, None))
+        if query and popularity_choice != "Mas votados (todo el tiempo)":
+            self.status_label.set_text("Buscando (la popularidad por periodo se ignora al buscar por texto)...")
+        else:
+            self.status_label.set_text("Buscando...")
         self.store.clear()
         self.tags_by_id.clear()
         self.rating_by_id.clear()
-        threading.Thread(target=self._search_thread, args=(api_key, query, required_tag), daemon=True).start()
+        threading.Thread(
+            target=self._search_thread, args=(api_key, query, required_tag, query_type, days), daemon=True
+        ).start()
 
-    def _search_thread(self, api_key, query, required_tag):
+    def _search_thread(self, api_key, query, required_tag, query_type, days):
         try:
-            results = steam_api_search(api_key, query, required_tag=required_tag)
+            results = steam_api_search(
+                api_key, query, required_tag=required_tag, query_type=query_type, days=days
+            )
         except SteamApiError as e:
             GLib.idle_add(self.status_label.set_text, str(e))
             return
@@ -484,6 +530,7 @@ class PickerWindow(Gtk.Window):
         self.monitors = detect_monitors() or ["DP-2"]
         self.assignments = load_current_assignments(self.monitors)
         self.target_monitor = self.monitors[0]
+        self.all_items = []
         self.titles_by_id = {}
         self.tags_by_id = {}
         self.rating_by_id = {}
@@ -514,6 +561,14 @@ class PickerWindow(Gtk.Window):
         self.rating_combo.set_active(0)
         self.rating_combo.connect("changed", self.refilter)
         filter_box.pack_start(self.rating_combo, False, False, 0)
+
+        filter_box.pack_start(Gtk.Label(label="Ordenar por:"), False, False, 0)
+        self.sort_combo = Gtk.ComboBoxText()
+        for option in SORT_OPTIONS:
+            self.sort_combo.append_text(option)
+        self.sort_combo.set_active(0)
+        self.sort_combo.connect("changed", self.on_sort_changed)
+        filter_box.pack_start(self.sort_combo, False, False, 0)
 
         vbox.pack_start(filter_box, False, False, 0)
 
@@ -575,9 +630,9 @@ class PickerWindow(Gtk.Window):
         GLib.idle_add(self.populate)
 
     def populate(self):
-        items = load_wallpapers()
+        self.all_items = load_wallpapers()
         all_tags = set()
-        for item in items:
+        for item in self.all_items:
             wid = item["id"]
             self.titles_by_id[wid] = item["title"]
             self.tags_by_id[wid] = item["tags"]
@@ -586,12 +641,11 @@ class PickerWindow(Gtk.Window):
 
             if item["thumb"] and os.path.isfile(item["thumb"]):
                 try:
-                    pixbuf = GdkPixbuf.Pixbuf.new_from_file(item["thumb"])
+                    item["pixbuf"] = GdkPixbuf.Pixbuf.new_from_file(item["thumb"])
                 except Exception:
-                    pixbuf = self.placeholder_pixbuf
+                    item["pixbuf"] = self.placeholder_pixbuf
             else:
-                pixbuf = self.placeholder_pixbuf
-            self.store.append([pixbuf, item["title"], wid])
+                item["pixbuf"] = self.placeholder_pixbuf
 
         for tag in sorted(all_tags, key=str.lower):
             self.tag_combo.append_text(tag)
@@ -599,13 +653,25 @@ class PickerWindow(Gtk.Window):
         for mon in self.monitors:
             self.update_monitor_label(mon)
 
-        self.status_label.set_text(f"{len(items)} wallpapers")
+        self.rebuild_store()
+        self.status_label.set_text(f"{len(self.all_items)} wallpapers")
         return False
 
     def update_monitor_label(self, mon):
         wid = self.assignments.get(mon)
         title = self.titles_by_id.get(wid, wid or "?")
         self.monitor_labels[mon].set_text(f"({title})")
+
+    def rebuild_store(self):
+        sort_choice = self.sort_combo.get_active_text() or "Titulo (A-Z)"
+        key_func = SORT_OPTIONS.get(sort_choice, SORT_OPTIONS["Titulo (A-Z)"])
+        ordered = sorted(self.all_items, key=key_func, reverse=SORT_REVERSE.get(sort_choice, False))
+        self.store.clear()
+        for item in ordered:
+            self.store.append([item["pixbuf"], item["title"], item["id"]])
+
+    def on_sort_changed(self, combo):
+        self.rebuild_store()
 
     def filter_func(self, model, iter_, data):
         wid = model[iter_][2]

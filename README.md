@@ -4,7 +4,7 @@ Selector grafico de fondos de pantalla animados para Linux, basado en
 [linux-wallpaperengine](https://github.com/Almamu/linux-wallpaperengine), con:
 
 > Existe una version hermana sin dependencias externas (sin API ni `steamcmd`), que abre el
-> Workshop en el propio Steam para suscribirte: [wallpaperengine-picker-local](../wallpaperengine-picker-local).
+> Workshop en el propio Steam para suscribirte: [wallpaperengine-picker-local](https://github.com/Joviva22/wallpaperengine-picker-local).
 
 - Miniaturas reales de cada wallpaper (generadas a partir del preview de Steam Workshop).
 - Asignacion de un wallpaper **distinto por cada monitor**.
