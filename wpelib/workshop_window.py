@@ -1,30 +1,36 @@
-"""Ventana de busqueda y descarga de wallpapers del Workshop de Steam via API."""
+"""Ventana de busqueda y descarga de wallpapers del Workshop de Steam via API.
+Sidebar de filtros (etiquetas/clasificacion/popularidad) + cuadricula de
+tarjetas (reutiliza WallpaperCard del panel principal) + panel de detalle a
+la derecha, siguiendo el mismo lenguaje visual que la ventana principal
+(ver docs/WorkShop.md)."""
 import threading
 
 import gi
 
 gi.require_version("Gtk", "3.0")
-from gi.repository import Gtk, GdkPixbuf, GLib
+from gi.repository import Gtk, GdkPixbuf, GLib, Gdk
 
-from .config import CONFIG, save_config, THUMB_SIZE, load_known_bad
+from .config import CONFIG, save_config, THUMB_SIZE, load_known_bad, load_favorite_ids, save_favorite_ids
 from .steam_api import (
     SteamApiError, steam_api_search_multi, download_workshop_thumb, download_workshop_item,
     verify_workshop_download, format_size, KNOWN_TAGS, RATING_TAGS, POPULARITY_OPTIONS,
     is_already_downloaded,
 )
-from .ui import labeled_frame, icon_button, open_in_steam, CheckListButton
+from .ui import icon_button, open_in_steam, CheckListButton, WallpaperCard
+
 
 class WorkshopBrowserWindow(Gtk.Window):
     def __init__(self, on_downloaded):
         super().__init__(title="Buscar en el Workshop de Wallpaper Engine")
-        self.set_default_size(1000, 750)
-        self.set_border_width(12)
+        self.set_default_size(1300, 820)
         self.on_downloaded = on_downloaded
         self.results = []
+        self.cards = {}
         self.tags_by_id = {}
         self.rating_by_id = {}
         self.filesize_by_id = {}
         self.title_by_id = {}
+        self.favorite_ids = load_favorite_ids()
         self.known_bad = load_known_bad()
         self.per_page = 50
         self.current_page = 1
@@ -32,95 +38,207 @@ class WorkshopBrowserWindow(Gtk.Window):
         self.last_search = None
         self.page_cache = {}
         self.prefetching = set()
+        self._selected_wid = None
         self.placeholder_pixbuf = GdkPixbuf.Pixbuf.new(GdkPixbuf.Colorspace.RGB, False, 8, *THUMB_SIZE)
         self.placeholder_pixbuf.fill(0x2f3140ff)
 
-        vbox = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
-        self.add(vbox)
+        root = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=0)
+        self.add(root)
 
-        search_frame = labeled_frame("Buscar en el Workshop")
-        search_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
-        search_box.set_border_width(8)
-        search_frame.add(search_box)
+        root.pack_start(self._build_sidebar(), False, False, 0)
 
-        self.search_entry = Gtk.Entry()
-        self.search_entry.set_placeholder_text("Palabras clave (vacio = mas votados)...")
-        self.search_entry.connect("activate", self.on_search_clicked)
-        search_box.pack_start(self.search_entry, True, True, 0)
+        content = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
+        content.set_border_width(14)
+        root.pack_start(content, True, True, 0)
 
-        self.tag_filter = CheckListButton("Etiquetas", KNOWN_TAGS)
-        search_box.pack_start(self.tag_filter, False, False, 0)
+        content.pack_start(self._build_header(), False, False, 0)
 
-        self.rating_filter = CheckListButton("Clasificacion", RATING_TAGS, initially_checked=["Everyone"])
-        search_box.pack_start(self.rating_filter, False, False, 0)
-
-        search_box.pack_start(Gtk.Label(label="Popularidad:"), False, False, 0)
-        self.popularity_combo = Gtk.ComboBoxText()
-        for option in POPULARITY_OPTIONS:
-            self.popularity_combo.append_text(option)
-        self.popularity_combo.set_active(0)
-        search_box.pack_start(self.popularity_combo, False, False, 0)
-
-        search_btn = icon_button("Buscar", "system-search-symbolic")
-        search_btn.get_style_context().add_class("suggested-action")
-        search_btn.connect("clicked", self.on_search_clicked)
-        search_box.pack_start(search_btn, False, False, 0)
-        vbox.pack_start(search_frame, False, False, 0)
-
-        self.store = Gtk.ListStore(GdkPixbuf.Pixbuf, str, str)  # pixbuf, title, id
-
-        self.icon_view = Gtk.IconView(model=self.store)
-        self.icon_view.set_pixbuf_column(0)
-        self.icon_view.set_text_column(1)
-        self.icon_view.set_item_width(THUMB_SIZE[0] + 20)
-        self.icon_view.set_item_padding(6)
-        self.icon_view.set_row_spacing(10)
-        self.icon_view.set_column_spacing(10)
-        self.icon_view.set_margin(8)
-        self.icon_view.connect("item-activated", self.on_item_activated)
+        self.flowbox = Gtk.FlowBox()
+        self.flowbox.set_valign(Gtk.Align.START)
+        self.flowbox.set_max_children_per_line(30)
+        self.flowbox.set_selection_mode(Gtk.SelectionMode.SINGLE)
+        self.flowbox.set_activate_on_single_click(False)
+        self.flowbox.set_row_spacing(14)
+        self.flowbox.set_column_spacing(14)
+        self.flowbox.set_homogeneous(True)
+        self.flowbox.connect("selected-children-changed", self.on_selection_changed)
 
         scrolled = Gtk.ScrolledWindow()
         scrolled.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
         scrolled.set_shadow_type(Gtk.ShadowType.IN)
-        scrolled.add(self.icon_view)
-        vbox.pack_start(scrolled, True, True, 0)
+        scrolled.add(self.flowbox)
+        content.pack_start(scrolled, True, True, 0)
 
-        pagination_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
-        pagination_box.set_halign(Gtk.Align.CENTER)
-        self.prev_btn = icon_button("Pagina anterior", "go-previous-symbolic")
-        self.prev_btn.connect("clicked", self.on_prev_page)
-        self.prev_btn.set_sensitive(False)
-        pagination_box.pack_start(self.prev_btn, False, False, 0)
-        self.page_label = Gtk.Label(label="")
-        pagination_box.pack_start(self.page_label, False, False, 0)
-        self.next_btn = icon_button("Pagina siguiente", "go-next-symbolic")
-        self.next_btn.set_image_position(Gtk.PositionType.RIGHT)
-        self.next_btn.connect("clicked", self.on_next_page)
-        self.next_btn.set_sensitive(False)
-        pagination_box.pack_start(self.next_btn, False, False, 0)
-        vbox.pack_start(pagination_box, False, False, 0)
-
-        bottom_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
-        vbox.pack_start(bottom_box, False, False, 0)
-        self.status_label = Gtk.Label(label="Escribe algo y pulsa Buscar, o busca directamente para ver los mas votados.")
-        self.status_label.set_halign(Gtk.Align.START)
-        bottom_box.pack_start(self.status_label, True, True, 0)
-        download_btn = icon_button("Descargar seleccionado", "emblem-downloads")
-        download_btn.get_style_context().add_class("suggested-action")
-        download_btn.connect("clicked", self.on_download_clicked)
-        bottom_box.pack_end(download_btn, False, False, 0)
-
-        open_steam_btn = icon_button("Ir a Steam", "applications-internet")
-        open_steam_btn.connect("clicked", self.on_open_selected_in_steam)
-        bottom_box.pack_end(open_steam_btn, False, False, 0)
+        content.pack_start(self._build_footer(), False, False, 0)
 
         self.log_view = Gtk.TextView()
         self.log_view.set_editable(False)
         self.log_buffer = self.log_view.get_buffer()
         log_scrolled = Gtk.ScrolledWindow()
-        log_scrolled.set_size_request(-1, 120)
+        log_scrolled.set_size_request(-1, 100)
+        log_scrolled.set_shadow_type(Gtk.ShadowType.IN)
         log_scrolled.add(self.log_view)
-        vbox.pack_start(log_scrolled, False, False, 0)
+        content.pack_start(log_scrolled, False, False, 0)
+
+        self.detail_revealer = Gtk.Revealer()
+        self.detail_revealer.set_transition_type(Gtk.RevealerTransitionType.SLIDE_LEFT)
+        self.detail_revealer.set_transition_duration(180)
+        self.detail_revealer.add(self._build_detail_panel())
+        root.pack_start(self.detail_revealer, False, False, 0)
+
+    # -- Construccion de la interfaz ------------------------------------------
+
+    def _build_sidebar(self):
+        sidebar = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
+        sidebar.set_size_request(220, -1)
+        sidebar.set_border_width(12)
+        sidebar.get_style_context().add_class("wpe-sidebar")
+
+        self.tag_filter = CheckListButton("Etiquetas", KNOWN_TAGS)
+        sidebar.pack_start(self.tag_filter, False, False, 0)
+
+        sidebar.pack_start(Gtk.Separator(), False, False, 8)
+        rating_title = Gtk.Label(label="CLASIFICACION", xalign=0)
+        rating_title.get_style_context().add_class("wpe-detail-section-title")
+        sidebar.pack_start(rating_title, False, False, 0)
+
+        self.rating_checks = {}
+        for opt in RATING_TAGS:
+            cb = Gtk.CheckButton(label=opt)
+            cb.set_active(opt == "Everyone")
+            sidebar.pack_start(cb, False, False, 0)
+            self.rating_checks[opt] = cb
+
+        sidebar.pack_start(Gtk.Separator(), False, False, 8)
+        pop_title = Gtk.Label(label="POPULARIDAD", xalign=0)
+        pop_title.get_style_context().add_class("wpe-detail-section-title")
+        sidebar.pack_start(pop_title, False, False, 0)
+
+        self.popularity_radios = {}
+        first = None
+        for option in POPULARITY_OPTIONS:
+            rb = (
+                Gtk.RadioButton.new_with_label_from_widget(first, option)
+                if first else Gtk.RadioButton.new_with_label(None, option)
+            )
+            if first is None:
+                first = rb
+            rb.set_active(option == "Mas votados (todo el tiempo)")
+            sidebar.pack_start(rb, False, False, 0)
+            self.popularity_radios[option] = rb
+
+        sidebar.pack_start(Gtk.Box(), True, True, 0)
+        return sidebar
+
+    def _build_header(self):
+        box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+
+        self.search_entry = Gtk.SearchEntry()
+        self.search_entry.set_placeholder_text("Buscar en el Workshop... (Enter para buscar, vacio = mas votados)")
+        self.search_entry.get_style_context().add_class("wpe-search-big")
+        self.search_entry.set_hexpand(True)
+        self.search_entry.connect("activate", self.on_search_clicked)
+        box.pack_start(self.search_entry, True, True, 0)
+
+        search_btn = Gtk.Button()
+        search_btn.set_image(Gtk.Image.new_from_icon_name("system-search-symbolic", Gtk.IconSize.BUTTON))
+        search_btn.set_tooltip_text("Buscar")
+        search_btn.get_style_context().add_class("suggested-action")
+        search_btn.connect("clicked", self.on_search_clicked)
+        box.pack_start(search_btn, False, False, 0)
+
+        self.prev_btn = Gtk.Button()
+        self.prev_btn.set_image(Gtk.Image.new_from_icon_name("go-previous-symbolic", Gtk.IconSize.BUTTON))
+        self.prev_btn.set_tooltip_text("Pagina anterior")
+        self.prev_btn.connect("clicked", self.on_prev_page)
+        self.prev_btn.set_sensitive(False)
+        box.pack_start(self.prev_btn, False, False, 0)
+
+        self.page_label = Gtk.Label(label="")
+        box.pack_start(self.page_label, False, False, 0)
+
+        self.next_btn = Gtk.Button()
+        self.next_btn.set_image(Gtk.Image.new_from_icon_name("go-next-symbolic", Gtk.IconSize.BUTTON))
+        self.next_btn.set_tooltip_text("Pagina siguiente")
+        self.next_btn.connect("clicked", self.on_next_page)
+        self.next_btn.set_sensitive(False)
+        box.pack_start(self.next_btn, False, False, 0)
+
+        return box
+
+    def _build_footer(self):
+        box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        self.status_label = Gtk.Label(label="Escribe algo y pulsa buscar, o busca directamente para ver los mas votados.")
+        self.status_label.set_halign(Gtk.Align.START)
+        box.pack_start(self.status_label, True, True, 0)
+        return box
+
+    def _build_detail_panel(self):
+        panel = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
+        panel.set_size_request(300, -1)
+        panel.set_border_width(14)
+        panel.get_style_context().add_class("wpe-detail-panel")
+
+        top_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL)
+        close_btn = Gtk.Button()
+        close_btn.set_relief(Gtk.ReliefStyle.NONE)
+        close_btn.set_image(Gtk.Image.new_from_icon_name("window-close-symbolic", Gtk.IconSize.BUTTON))
+        close_btn.connect("clicked", lambda *_: self.flowbox.unselect_all())
+        top_row.pack_end(close_btn, False, False, 0)
+        panel.pack_start(top_row, False, False, 0)
+
+        self.detail_image = Gtk.Image()
+        panel.pack_start(self.detail_image, False, False, 0)
+
+        self.detail_title = Gtk.Label(xalign=0)
+        self.detail_title.set_line_wrap(True)
+        self.detail_title.get_style_context().add_class("wpe-detail-title")
+        panel.pack_start(self.detail_title, False, False, 0)
+
+        self.detail_open_steam_btn = icon_button("Ir a Steam", "applications-internet")
+        self.detail_open_steam_btn.get_style_context().add_class("suggested-action")
+        self.detail_open_steam_btn.connect("clicked", self._on_detail_open_steam)
+        panel.pack_start(self.detail_open_steam_btn, False, False, 0)
+
+        self.detail_download_btn = icon_button("Descargar", "emblem-downloads")
+        self.detail_download_btn.connect("clicked", self._on_detail_download)
+        panel.pack_start(self.detail_download_btn, False, False, 0)
+
+        panel.pack_start(Gtk.Separator(), False, False, 6)
+
+        info_title = Gtk.Label(label="INFORMACION", xalign=0)
+        info_title.get_style_context().add_class("wpe-detail-section-title")
+        panel.pack_start(info_title, False, False, 0)
+
+        self.detail_info_grid = Gtk.Grid()
+        self.detail_info_grid.set_row_spacing(4)
+        self.detail_info_grid.set_column_spacing(10)
+        panel.pack_start(self.detail_info_grid, False, False, 0)
+
+        tags_title = Gtk.Label(label="ETIQUETAS", xalign=0)
+        tags_title.get_style_context().add_class("wpe-detail-section-title")
+        panel.pack_start(tags_title, False, False, 8)
+
+        self.detail_tags_box = Gtk.FlowBox()
+        self.detail_tags_box.set_selection_mode(Gtk.SelectionMode.NONE)
+        self.detail_tags_box.set_max_children_per_line(4)
+        self.detail_tags_box.set_min_children_per_line(1)
+        panel.pack_start(self.detail_tags_box, False, False, 0)
+
+        return panel
+
+    # -- Filtros (sidebar) -----------------------------------------------------
+
+    def get_selected_ratings(self):
+        return [opt for opt, cb in self.rating_checks.items() if cb.get_active()]
+
+    def get_selected_popularity(self):
+        for option, rb in self.popularity_radios.items():
+            if rb.get_active():
+                return option
+        return "Mas votados (todo el tiempo)"
+
+    # -- API key ----------------------------------------------------------------
 
     def get_api_key(self):
         key = CONFIG.get("steam_api_key")
@@ -150,6 +268,8 @@ class WorkshopBrowserWindow(Gtk.Window):
         self.log_buffer.insert(end_iter, text)
         self.log_view.scroll_to_iter(self.log_buffer.get_end_iter(), 0, False, 0, 0)
 
+    # -- Busqueda y paginacion ---------------------------------------------------
+
     def on_search_clicked(self, *args):
         api_key = self.get_api_key()
         if not api_key:
@@ -157,8 +277,8 @@ class WorkshopBrowserWindow(Gtk.Window):
             return
         query = self.search_entry.get_text().strip()
         required_tags = self.tag_filter.get_selected()
-        ratings = self.rating_filter.get_selected()
-        popularity_choice = self.popularity_combo.get_active_text()
+        ratings = self.get_selected_ratings()
+        popularity_choice = self.get_selected_popularity()
         query_type, days = POPULARITY_OPTIONS.get(popularity_choice, (0, None))
         if query and popularity_choice != "Mas votados (todo el tiempo)":
             self.status_label.set_text("Buscando (la popularidad por periodo se ignora al buscar por texto)...")
@@ -167,7 +287,6 @@ class WorkshopBrowserWindow(Gtk.Window):
             "api_key": api_key, "query": query, "required_tags": required_tags,
             "ratings": ratings, "query_type": query_type, "days": days,
         }
-        # Nueva busqueda: la cache de paginas de la busqueda anterior ya no vale.
         self.page_cache = {}
         self.prefetching = set()
         self.run_search(page=1)
@@ -183,7 +302,9 @@ class WorkshopBrowserWindow(Gtk.Window):
             return
 
         self.status_label.set_text(f"Buscando (pagina {page})...")
-        self.store.clear()
+        for child in list(self.flowbox.get_children()):
+            self.flowbox.remove(child)
+        self.cards = {}
         self.tags_by_id.clear()
         self.rating_by_id.clear()
         self.prev_btn.set_sensitive(False)
@@ -209,7 +330,11 @@ class WorkshopBrowserWindow(Gtk.Window):
         self.page_cache[page] = (total, results)
         self.results = results
         self.total_results = total
-        self.store.clear()
+
+        for child in list(self.flowbox.get_children()):
+            self.flowbox.remove(child)
+        self.cards = {}
+
         for item in results:
             wid = item.get("publishedfileid", "")
             title = item.get("title", wid)
@@ -230,13 +355,29 @@ class WorkshopBrowserWindow(Gtk.Window):
                     except Exception:
                         pixbuf = self.placeholder_pixbuf
 
-            size_text = format_size(item.get("file_size"))
-            display_title = f"{title} ({size_text})"
+            subtitle_parts = [format_size(item.get("file_size"))]
+            if item_tags:
+                subtitle_parts.append(item_tags[0])
+            subtitle = " · ".join(subtitle_parts)
+
+            badge = None
             if wid in self.known_bad:
-                display_title = f"[⚠ Fallo conocido] {display_title}"
-            if is_already_downloaded(wid):
-                display_title = f"[Ya la tienes] {display_title}"
-            self.store.append([pixbuf, display_title, wid])
+                badge = "⚠ Fallo conocido"
+            elif is_already_downloaded(wid):
+                badge = "Ya la tienes"
+
+            card = WallpaperCard(
+                wid, title, subtitle, pixbuf,
+                favorite=wid in self.favorite_ids, badge=badge,
+            )
+            card.on_assign = self.start_download
+            card.on_preview = self._select_wid
+            card.on_toggle_favorite = self.on_card_favorite_toggled
+            card.on_context_menu = self.show_context_menu
+            self.flowbox.add(card)
+            self.cards[wid] = card
+
+        self.flowbox.show_all()
 
         total_pages = max(1, -(-total // self.per_page)) if total else 1
         cached_note = " (precargada)" if was_cached else ""
@@ -269,7 +410,6 @@ class WorkshopBrowserWindow(Gtk.Window):
         except SteamApiError:
             GLib.idle_add(self.prefetching.discard, page)
             return
-        # Calienta la cache de miniaturas aqui mismo, en el hilo de fondo.
         for item in results:
             wid = item.get("publishedfileid", "")
             preview_url = item.get("preview_url", "")
@@ -281,7 +421,6 @@ class WorkshopBrowserWindow(Gtk.Window):
         self.page_cache[page] = (total, results)
         self.prefetching.discard(page)
         if page == self.current_page:
-            # Si mientras se precargaba llegaste a esta pagina por otra via, muestrala.
             self._populate_results(total, results, page)
         return False
 
@@ -292,32 +431,108 @@ class WorkshopBrowserWindow(Gtk.Window):
     def on_next_page(self, button):
         self.run_search(self.current_page + 1)
 
-    def get_selected_id(self):
-        selected = self.icon_view.get_selected_items()
-        if not selected:
-            return None
-        iter_ = self.store.get_iter(selected[0])
-        return self.store[iter_][2]
+    # -- Seleccion y panel de detalle --------------------------------------------
 
-    def on_item_activated(self, icon_view, path):
-        iter_ = self.store.get_iter(path)
-        wid = self.store[iter_][2]
-        self.start_download(wid)
+    def get_selected_ids(self):
+        return [child.get_child().wid for child in self.flowbox.get_selected_children()]
 
-    def on_download_clicked(self, button):
-        wid = self.get_selected_id()
-        if not wid:
-            self.status_label.set_text("Selecciona un wallpaper de los resultados primero")
-            return
-        self.start_download(wid)
+    def on_selection_changed(self, flowbox):
+        ids = self.get_selected_ids()
+        if len(ids) == 1:
+            self._select_wid(ids[0])
+        else:
+            self._selected_wid = None
+            self.detail_revealer.set_reveal_child(False)
+        for wid, card in self.cards.items():
+            card.set_assigned(wid == self._selected_wid)
 
-    def on_open_selected_in_steam(self, button):
-        wid = self.get_selected_id()
-        if not wid:
-            self.status_label.set_text("Selecciona un wallpaper de los resultados primero")
-            return
+    def _select_wid(self, wid):
+        self._selected_wid = wid
+        card = self.cards.get(wid)
+        if card:
+            child = card.get_parent()
+            if child and not child.is_selected():
+                self.flowbox.select_child(child)
+        self._update_detail_panel(wid)
+
+    def _update_detail_panel(self, wid):
+        title = self.title_by_id.get(wid, wid)
+        card = self.cards.get(wid)
+        pixbuf = card.image.get_pixbuf() if card else self.placeholder_pixbuf
+        self.detail_image.set_from_pixbuf(pixbuf)
+        self.detail_title.set_text(title)
+
+        for child in list(self.detail_info_grid.get_children()):
+            self.detail_info_grid.remove(child)
+        rows = [
+            ("Tamano", format_size(self.filesize_by_id.get(wid))),
+            ("Clasificacion", self.rating_by_id.get(wid, "Desconocido")),
+            ("Ya la tienes", "Si" if is_already_downloaded(wid) else "No"),
+        ]
+        for i, (label, value) in enumerate(rows):
+            l1 = Gtk.Label(label=label, xalign=0)
+            l1.get_style_context().add_class("dim-label")
+            l2 = Gtk.Label(label=str(value), xalign=0)
+            l2.set_line_wrap(True)
+            self.detail_info_grid.attach(l1, 0, i, 1, 1)
+            self.detail_info_grid.attach(l2, 1, i, 1, 1)
+        self.detail_info_grid.show_all()
+
+        for child in list(self.detail_tags_box.get_children()):
+            self.detail_tags_box.remove(child)
+        for tag in self.tags_by_id.get(wid, []):
+            chip = Gtk.Label(label=tag)
+            chip.get_style_context().add_class("wpe-tag-chip")
+            self.detail_tags_box.add(chip)
+        self.detail_tags_box.show_all()
+
+        self.detail_download_btn.set_sensitive(not is_already_downloaded(wid))
+        self.detail_revealer.set_reveal_child(True)
+
+    def on_card_favorite_toggled(self, wid, is_favorite):
+        if is_favorite:
+            self.favorite_ids.add(wid)
+        else:
+            self.favorite_ids.discard(wid)
+        save_favorite_ids(self.favorite_ids)
+
+    def show_context_menu(self, card, event, wid):
+        menu = Gtk.Menu()
+
+        dl_item = Gtk.MenuItem(label="Descargar")
+        dl_item.connect("activate", lambda *_: self.start_download(wid))
+        menu.append(dl_item)
+
+        steam_item = Gtk.MenuItem(label="Ir a Steam")
+        steam_item.connect("activate", lambda *_: self._open_in_steam(wid))
+        menu.append(steam_item)
+
+        menu.append(Gtk.SeparatorMenuItem())
+
+        fav_item = Gtk.CheckMenuItem(label="Favorito")
+        fav_item.set_active(wid in self.favorite_ids)
+        fav_item.connect("toggled", lambda mi: card.heart_btn.set_active(mi.get_active()))
+        menu.append(fav_item)
+
+        menu.show_all()
+        if event is not None:
+            menu.popup_at_pointer(event)
+        else:
+            menu.popup_at_widget(card.menu_btn, Gdk.Gravity.SOUTH_EAST, Gdk.Gravity.NORTH_EAST, None)
+
+    # -- Descarga -----------------------------------------------------------------
+
+    def _on_detail_open_steam(self, button):
+        if self._selected_wid:
+            self._open_in_steam(self._selected_wid)
+
+    def _open_in_steam(self, wid):
         open_in_steam(wid)
         self.status_label.set_text(f"Abriendo '{self.title_by_id.get(wid, wid)}' en Steam...")
+
+    def _on_detail_download(self, button):
+        if self._selected_wid:
+            self.start_download(self._selected_wid)
 
     def start_download(self, wid):
         title = self.title_by_id.get(wid, wid)
@@ -337,6 +552,11 @@ class WorkshopBrowserWindow(Gtk.Window):
         if verified:
             self.status_label.set_markup(f"<span foreground='#2ecc71'>Descarga confirmada: {GLib.markup_escape_text(title)}</span>")
             self.append_log(f"--- Verificado en disco: {title} listo para usar ---\n")
+            card = self.cards.get(wid)
+            if card:
+                card.set_badge("Ya la tienes")
+            if wid == self._selected_wid:
+                self.detail_download_btn.set_sensitive(False)
             self.show_result_dialog(
                 Gtk.MessageType.INFO, "Descarga completada",
                 f"'{title}' se descargo correctamente y ya esta disponible en la lista principal.",
@@ -376,5 +596,5 @@ class WorkshopBrowserWindow(Gtk.Window):
         response = dialog.run()
         dialog.destroy()
         if response == Gtk.ResponseType.APPLY:
-            open_in_steam(wid)
+            self._open_in_steam(wid)
             self.status_label.set_text("Abriendo el item en Steam. Suscribete y luego pulsa 'Refrescar lista' en la ventana principal.")
