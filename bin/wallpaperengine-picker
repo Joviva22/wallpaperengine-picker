@@ -182,7 +182,18 @@ class SteamApiError(Exception):
     pass
 
 
-def steam_api_search(api_key, search_text, page=1, per_page=30):
+# Categorias de etiquetas conocidas del Workshop de Wallpaper Engine (visibles en su pagina
+# de busqueda). La clasificacion de edad no es una etiqueta normal expuesta por la API, asi
+# que esa se filtra en el cliente comprobando las etiquetas devueltas por cada resultado.
+KNOWN_TAGS = [
+    "Abstract", "Animal", "Anime", "CGI", "Cartoon", "Cyberpunk", "Fantasy", "Game",
+    "Landscape", "Memes", "Music", "Nature", "Pixel art", "Relaxing", "Retro",
+    "Sci-Fi", "Sports", "Technology", "Television", "Unspecified", "Vehicle",
+]
+RATING_TAGS = ["Everyone", "Questionable", "Mature"]
+
+
+def steam_api_search(api_key, search_text, required_tag=None, page=1, per_page=50):
     query_type = 12 if search_text else 0  # 12 = RankedByTextSearch, 0 = RankedByVote
     params = {
         "key": api_key,
@@ -197,6 +208,8 @@ def steam_api_search(api_key, search_text, page=1, per_page=30):
     }
     if search_text:
         params["search_text"] = search_text
+    if required_tag:
+        params["requiredtags[0]"] = required_tag
 
     url = STEAM_API_QUERYFILES + "?" + urllib.parse.urlencode(params)
     try:
@@ -264,6 +277,8 @@ class WorkshopBrowserWindow(Gtk.Window):
         self.set_border_width(8)
         self.on_downloaded = on_downloaded
         self.results = []
+        self.tags_by_id = {}
+        self.rating_by_id = {}
         self.placeholder_pixbuf = GdkPixbuf.Pixbuf.new(GdkPixbuf.Colorspace.RGB, False, 8, *THUMB_SIZE)
 
         vbox = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
@@ -275,13 +290,34 @@ class WorkshopBrowserWindow(Gtk.Window):
         self.search_entry.set_placeholder_text("Palabras clave (vacio = mas votados)...")
         self.search_entry.connect("activate", self.on_search_clicked)
         search_box.pack_start(self.search_entry, True, True, 0)
+
+        search_box.pack_start(Gtk.Label(label="Etiqueta:"), False, False, 0)
+        self.tag_combo = Gtk.ComboBoxText()
+        self.tag_combo.append_text("Todas")
+        for tag in KNOWN_TAGS:
+            self.tag_combo.append_text(tag)
+        self.tag_combo.set_active(0)
+        search_box.pack_start(self.tag_combo, False, False, 0)
+
+        search_box.pack_start(Gtk.Label(label="Clasificacion:"), False, False, 0)
+        self.rating_combo = Gtk.ComboBoxText()
+        self.rating_combo.append_text("Todas")
+        for rating in RATING_TAGS:
+            self.rating_combo.append_text(rating)
+        self.rating_combo.set_active(0)
+        self.rating_combo.connect("changed", self.on_rating_filter_changed)
+        search_box.pack_start(self.rating_combo, False, False, 0)
+
         search_btn = Gtk.Button(label="Buscar")
         search_btn.connect("clicked", self.on_search_clicked)
         search_box.pack_start(search_btn, False, False, 0)
         vbox.pack_start(search_box, False, False, 0)
 
         self.store = Gtk.ListStore(GdkPixbuf.Pixbuf, str, str)  # pixbuf, title, id
-        self.icon_view = Gtk.IconView(model=self.store)
+        self.filter_model = self.store.filter_new()
+        self.filter_model.set_visible_func(self.filter_func)
+
+        self.icon_view = Gtk.IconView(model=self.filter_model)
         self.icon_view.set_pixbuf_column(0)
         self.icon_view.set_text_column(1)
         self.icon_view.set_item_width(THUMB_SIZE[0] + 20)
@@ -343,13 +379,17 @@ class WorkshopBrowserWindow(Gtk.Window):
             self.status_label.set_text("Necesitas una API key para buscar en el Workshop.")
             return
         query = self.search_entry.get_text().strip()
+        tag_choice = self.tag_combo.get_active_text()
+        required_tag = tag_choice if tag_choice and tag_choice != "Todas" else None
         self.status_label.set_text("Buscando...")
         self.store.clear()
-        threading.Thread(target=self._search_thread, args=(api_key, query), daemon=True).start()
+        self.tags_by_id.clear()
+        self.rating_by_id.clear()
+        threading.Thread(target=self._search_thread, args=(api_key, query, required_tag), daemon=True).start()
 
-    def _search_thread(self, api_key, query):
+    def _search_thread(self, api_key, query, required_tag):
         try:
-            results = steam_api_search(api_key, query)
+            results = steam_api_search(api_key, query, required_tag=required_tag)
         except SteamApiError as e:
             GLib.idle_add(self.status_label.set_text, str(e))
             return
@@ -361,6 +401,11 @@ class WorkshopBrowserWindow(Gtk.Window):
             wid = item.get("publishedfileid", "")
             title = item.get("title", wid)
             preview_url = item.get("preview_url", "")
+            item_tags = [t.get("tag", "") for t in item.get("tags", []) or []]
+            self.tags_by_id[wid] = item_tags
+            rating = next((r for r in RATING_TAGS if r in item_tags), "Desconocido")
+            self.rating_by_id[wid] = rating
+
             pixbuf = self.placeholder_pixbuf
             if preview_url:
                 thumb_path = download_workshop_thumb(wid, preview_url)
@@ -370,19 +415,34 @@ class WorkshopBrowserWindow(Gtk.Window):
                     except Exception:
                         pixbuf = self.placeholder_pixbuf
             self.store.append([pixbuf, title, wid])
+        self.refilter()
         self.status_label.set_text(f"{len(results)} resultados")
         return False
+
+    def filter_func(self, model, iter_, data):
+        wid = model[iter_][2]
+        rating_choice = self.rating_combo.get_active_text()
+        if rating_choice and rating_choice != "Todas":
+            if self.rating_by_id.get(wid) != rating_choice:
+                return False
+        return True
+
+    def refilter(self):
+        self.filter_model.refilter()
+
+    def on_rating_filter_changed(self, combo):
+        self.refilter()
 
     def get_selected_id(self):
         selected = self.icon_view.get_selected_items()
         if not selected:
             return None
-        iter_ = self.store.get_iter(selected[0])
-        return self.store[iter_][2]
+        iter_ = self.filter_model.get_iter(selected[0])
+        return self.filter_model[iter_][2]
 
     def on_item_activated(self, icon_view, path):
-        iter_ = self.store.get_iter(path)
-        wid = self.store[iter_][2]
+        iter_ = self.filter_model.get_iter(path)
+        wid = self.filter_model[iter_][2]
         self.start_download(wid)
 
     def on_download_clicked(self, button):
