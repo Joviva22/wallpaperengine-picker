@@ -360,6 +360,13 @@ def labeled_frame(title):
     return frame
 
 
+def open_in_steam(wid):
+    try:
+        subprocess.Popen(["xdg-open", f"steam://url/CommunityFilePage/{wid}"])
+    except Exception:
+        subprocess.Popen(["xdg-open", f"https://steamcommunity.com/sharedfiles/filedetails/?id={wid}"])
+
+
 def icon_button(label, icon_name):
     btn = Gtk.Button.new_with_label(label)
     btn.set_image(Gtk.Image.new_from_icon_name(icon_name, Gtk.IconSize.BUTTON))
@@ -472,6 +479,10 @@ class WorkshopBrowserWindow(Gtk.Window):
         download_btn.get_style_context().add_class("suggested-action")
         download_btn.connect("clicked", self.on_download_clicked)
         bottom_box.pack_end(download_btn, False, False, 0)
+
+        open_steam_btn = icon_button("Ir a Steam", "applications-internet")
+        open_steam_btn.connect("clicked", self.on_open_selected_in_steam)
+        bottom_box.pack_end(open_steam_btn, False, False, 0)
 
         self.log_view = Gtk.TextView()
         self.log_view.set_editable(False)
@@ -614,6 +625,14 @@ class WorkshopBrowserWindow(Gtk.Window):
             return
         self.start_download(wid)
 
+    def on_open_selected_in_steam(self, button):
+        wid = self.get_selected_id()
+        if not wid:
+            self.status_label.set_text("Selecciona un wallpaper de los resultados primero")
+            return
+        open_in_steam(wid)
+        self.status_label.set_text(f"Abriendo '{self.title_by_id.get(wid, wid)}' en Steam...")
+
     def start_download(self, wid):
         title = self.title_by_id.get(wid, wid)
         size_text = format_size(self.filesize_by_id.get(wid))
@@ -671,10 +690,7 @@ class WorkshopBrowserWindow(Gtk.Window):
         response = dialog.run()
         dialog.destroy()
         if response == Gtk.ResponseType.APPLY:
-            try:
-                subprocess.Popen(["xdg-open", f"steam://url/CommunityFilePage/{wid}"])
-            except Exception:
-                subprocess.Popen(["xdg-open", f"https://steamcommunity.com/sharedfiles/filedetails/?id={wid}"])
+            open_in_steam(wid)
             self.status_label.set_text("Abriendo el item en Steam. Suscribete y luego pulsa 'Refrescar lista' en la ventana principal.")
 
 
