@@ -220,7 +220,7 @@ POPULARITY_OPTIONS = {
 }
 
 
-def steam_api_search(api_key, search_text, required_tag=None, query_type=0, days=None, page=1, per_page=50):
+def steam_api_search(api_key, search_text, required_tags=None, query_type=0, days=None, page=1, per_page=50):
     if search_text:
         query_type = 12  # RankedByTextSearch tiene prioridad sobre la popularidad elegida
     params = {
@@ -236,8 +236,10 @@ def steam_api_search(api_key, search_text, required_tag=None, query_type=0, days
     }
     if search_text:
         params["search_text"] = search_text
-    if required_tag:
-        params["requiredtags[0]"] = required_tag
+    for i, tag in enumerate(required_tags or []):
+        params[f"requiredtags[{i}]"] = tag
+    if required_tags:
+        params["match_all_tags"] = "true"
     if days:
         params["days"] = str(days)
 
@@ -250,7 +252,8 @@ def steam_api_search(api_key, search_text, required_tag=None, query_type=0, days
     except Exception as e:
         raise SteamApiError(f"No se pudo contactar la API de Steam: {e}") from e
 
-    return data.get("response", {}).get("publishedfiledetails", [])
+    response = data.get("response", {})
+    return response.get("total", 0), response.get("publishedfiledetails", [])
 
 
 def download_workshop_thumb(wid, url):
@@ -309,6 +312,10 @@ class WorkshopBrowserWindow(Gtk.Window):
         self.results = []
         self.tags_by_id = {}
         self.rating_by_id = {}
+        self.per_page = 50
+        self.current_page = 1
+        self.total_results = 0
+        self.last_search = None
         self.placeholder_pixbuf = GdkPixbuf.Pixbuf.new(GdkPixbuf.Colorspace.RGB, False, 8, *THUMB_SIZE)
 
         vbox = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
@@ -335,7 +342,6 @@ class WorkshopBrowserWindow(Gtk.Window):
         for rating in RATING_TAGS:
             self.rating_combo.append_text(rating)
         self.rating_combo.set_active(0)
-        self.rating_combo.connect("changed", self.on_rating_filter_changed)
         search_box.pack_start(self.rating_combo, False, False, 0)
 
         search_box.pack_start(Gtk.Label(label="Popularidad:"), False, False, 0)
@@ -351,10 +357,8 @@ class WorkshopBrowserWindow(Gtk.Window):
         vbox.pack_start(search_box, False, False, 0)
 
         self.store = Gtk.ListStore(GdkPixbuf.Pixbuf, str, str)  # pixbuf, title, id
-        self.filter_model = self.store.filter_new()
-        self.filter_model.set_visible_func(self.filter_func)
 
-        self.icon_view = Gtk.IconView(model=self.filter_model)
+        self.icon_view = Gtk.IconView(model=self.store)
         self.icon_view.set_pixbuf_column(0)
         self.icon_view.set_text_column(1)
         self.icon_view.set_item_width(THUMB_SIZE[0] + 20)
@@ -364,6 +368,19 @@ class WorkshopBrowserWindow(Gtk.Window):
         scrolled.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
         scrolled.add(self.icon_view)
         vbox.pack_start(scrolled, True, True, 0)
+
+        pagination_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+        self.prev_btn = Gtk.Button(label="< Pagina anterior")
+        self.prev_btn.connect("clicked", self.on_prev_page)
+        self.prev_btn.set_sensitive(False)
+        pagination_box.pack_start(self.prev_btn, False, False, 0)
+        self.page_label = Gtk.Label(label="")
+        pagination_box.pack_start(self.page_label, False, False, 0)
+        self.next_btn = Gtk.Button(label="Pagina siguiente >")
+        self.next_btn.connect("clicked", self.on_next_page)
+        self.next_btn.set_sensitive(False)
+        pagination_box.pack_start(self.next_btn, False, False, 0)
+        vbox.pack_start(pagination_box, False, False, 0)
 
         bottom_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
         vbox.pack_start(bottom_box, False, False, 0)
@@ -417,32 +434,48 @@ class WorkshopBrowserWindow(Gtk.Window):
             return
         query = self.search_entry.get_text().strip()
         tag_choice = self.tag_combo.get_active_text()
-        required_tag = tag_choice if tag_choice and tag_choice != "Todas" else None
+        rating_choice = self.rating_combo.get_active_text()
+        required_tags = [t for t in (tag_choice, rating_choice) if t and t != "Todas"]
         popularity_choice = self.popularity_combo.get_active_text()
         query_type, days = POPULARITY_OPTIONS.get(popularity_choice, (0, None))
         if query and popularity_choice != "Mas votados (todo el tiempo)":
             self.status_label.set_text("Buscando (la popularidad por periodo se ignora al buscar por texto)...")
-        else:
-            self.status_label.set_text("Buscando...")
+
+        self.last_search = {
+            "api_key": api_key, "query": query, "required_tags": required_tags,
+            "query_type": query_type, "days": days,
+        }
+        self.run_search(page=1)
+
+    def run_search(self, page):
+        if not self.last_search:
+            return
+        self.current_page = page
+        self.status_label.set_text(f"Buscando (pagina {page})...")
         self.store.clear()
         self.tags_by_id.clear()
         self.rating_by_id.clear()
-        threading.Thread(
-            target=self._search_thread, args=(api_key, query, required_tag, query_type, days), daemon=True
-        ).start()
+        self.prev_btn.set_sensitive(False)
+        self.next_btn.set_sensitive(False)
+        params = dict(self.last_search)
+        threading.Thread(target=self._search_thread, args=(params, page), daemon=True).start()
 
-    def _search_thread(self, api_key, query, required_tag, query_type, days):
+    def _search_thread(self, params, page):
         try:
-            results = steam_api_search(
-                api_key, query, required_tag=required_tag, query_type=query_type, days=days
+            total, results = steam_api_search(
+                params["api_key"], params["query"],
+                required_tags=params["required_tags"],
+                query_type=params["query_type"], days=params["days"],
+                page=page, per_page=self.per_page,
             )
         except SteamApiError as e:
             GLib.idle_add(self.status_label.set_text, str(e))
             return
-        GLib.idle_add(self._populate_results, results)
+        GLib.idle_add(self._populate_results, total, results, page)
 
-    def _populate_results(self, results):
+    def _populate_results(self, total, results, page):
         self.results = results
+        self.total_results = total
         for item in results:
             wid = item.get("publishedfileid", "")
             title = item.get("title", wid)
@@ -461,34 +494,31 @@ class WorkshopBrowserWindow(Gtk.Window):
                     except Exception:
                         pixbuf = self.placeholder_pixbuf
             self.store.append([pixbuf, title, wid])
-        self.refilter()
-        self.status_label.set_text(f"{len(results)} resultados")
+
+        total_pages = max(1, -(-total // self.per_page)) if total else 1
+        self.page_label.set_text(f"Pagina {page} de {total_pages} ({total} resultados)")
+        self.prev_btn.set_sensitive(page > 1)
+        self.next_btn.set_sensitive(page < total_pages)
+        self.status_label.set_text(f"{len(results)} resultados en esta pagina")
         return False
 
-    def filter_func(self, model, iter_, data):
-        wid = model[iter_][2]
-        rating_choice = self.rating_combo.get_active_text()
-        if rating_choice and rating_choice != "Todas":
-            if self.rating_by_id.get(wid) != rating_choice:
-                return False
-        return True
+    def on_prev_page(self, button):
+        if self.current_page > 1:
+            self.run_search(self.current_page - 1)
 
-    def refilter(self):
-        self.filter_model.refilter()
-
-    def on_rating_filter_changed(self, combo):
-        self.refilter()
+    def on_next_page(self, button):
+        self.run_search(self.current_page + 1)
 
     def get_selected_id(self):
         selected = self.icon_view.get_selected_items()
         if not selected:
             return None
-        iter_ = self.filter_model.get_iter(selected[0])
-        return self.filter_model[iter_][2]
+        iter_ = self.store.get_iter(selected[0])
+        return self.store[iter_][2]
 
     def on_item_activated(self, icon_view, path):
-        iter_ = self.filter_model.get_iter(path)
-        wid = self.filter_model[iter_][2]
+        iter_ = self.store.get_iter(path)
+        wid = self.store[iter_][2]
         self.start_download(wid)
 
     def on_download_clicked(self, button):
