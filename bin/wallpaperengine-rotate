@@ -1,0 +1,46 @@
+#!/usr/bin/env bash
+# Demonio de rotacion: cada N minutos, avanza al siguiente wallpaper de la lista
+# configurada para cada pantalla (playlists.json), llamando a wallpaperengine-apply.
+# Pensado para correr en segundo plano de forma indefinida desde el autostart.
+set -uo pipefail
+
+SCRIPT_DIR=$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)
+source "$SCRIPT_DIR/wallpaperengine-common.sh"
+
+CONF_DIR="$WPE_CONF_DIR"
+PLAYLISTS_FILE="$CONF_DIR/playlists.json"
+APPLY="$SCRIPT_DIR/wallpaperengine-apply"
+POLL_SECONDS=30
+
+mkdir -p "$CONF_DIR"
+
+while true; do
+    if [[ -f "$PLAYLISTS_FILE" ]]; then
+        now=$(date +%s)
+        for screen in $(jq -r 'keys[]' "$PLAYLISTS_FILE" 2>/dev/null); do
+            enabled=$(jq -r --arg s "$screen" '.[$s].enabled // false' "$PLAYLISTS_FILE")
+            [[ "$enabled" != "true" ]] && continue
+
+            count=$(jq -r --arg s "$screen" '.[$s].items | length' "$PLAYLISTS_FILE")
+            [[ "$count" -lt 1 ]] && continue
+
+            interval=$(jq -r --arg s "$screen" '.[$s].interval_minutes // 30' "$PLAYLISTS_FILE")
+            last_switch=$(jq -r --arg s "$screen" '.[$s].last_switch // 0' "$PLAYLISTS_FILE")
+            elapsed=$(( now - last_switch ))
+            threshold=$(( interval * 60 ))
+
+            if (( elapsed >= threshold )); then
+                idx=$(jq -r --arg s "$screen" '.[$s].current_index // 0' "$PLAYLISTS_FILE")
+                next_idx=$(( (idx + 1) % count ))
+                id=$(jq -r --arg s "$screen" --argjson i "$next_idx" '.[$s].items[$i]' "$PLAYLISTS_FILE")
+
+                "$APPLY" "$screen=$id" >/dev/null 2>&1
+
+                tmp=$(jq --arg s "$screen" --argjson i "$next_idx" --argjson t "$now" \
+                    '.[$s].current_index = $i | .[$s].last_switch = $t' "$PLAYLISTS_FILE")
+                echo "$tmp" > "$PLAYLISTS_FILE"
+            fi
+        done
+    fi
+    sleep "$POLL_SECONDS"
+done

@@ -95,6 +95,29 @@ wallpaperengine-picker
 - **Buscar en Workshop (API)**: abre una ventana para buscar wallpapers directamente en el
   Workshop de Steam y descargarlos con `steamcmd`. La primera vez pedira tu Steam Web API
   Key (ver abajo).
+- **Mostrar ocultos** / **Ocultar/Mostrar**: oculta wallpapers que no quieras ver en la lista
+  (por ejemplo, uno que no renderiza bien) sin borrarlos del disco. Se guardan en
+  `hidden.json`; activa "Mostrar ocultos" para volver a verlos (marcados como "[Oculto]") y
+  poder deshacerlo.
+- **Rotacion...**: abre la ventana de listas de rotacion (ver seccion siguiente).
+
+### Rotacion automatica de wallpapers
+
+Cada pantalla puede tener, en vez de un unico wallpaper fijo, una lista de wallpapers que
+van rotando solos cada cierto tiempo:
+
+1. Pulsa **"Rotacion..."**, elige la pantalla a configurar.
+2. Anade wallpapers desde "Disponibles" a "Orden de rotacion" (boton "Anadir"), reordena con
+   "Subir"/"Bajar" y quita los que no quieras con "Quitar".
+3. Marca "Activar rotacion en esta pantalla" y ajusta el intervalo en minutos.
+4. Pulsa "Guardar y aplicar": aplica el primer wallpaper de la lista de inmediato y guarda la
+   configuracion en `~/.config/wallpaperengine-picker/playlists.json`.
+
+Un demonio en segundo plano (`wallpaperengine-rotate`, instalado por `install.sh` como
+autostart de KDE) revisa cada 30 segundos si toca avanzar alguna pantalla a su siguiente
+wallpaper, asi que la rotacion sigue funcionando aunque cierres la ventana principal.
+Asignar manualmente un wallpaper fijo a una pantalla (fuera de la ventana de rotacion)
+desactiva automaticamente su rotacion, para que no se pisen entre si.
 
 ### Configurar la Steam Web API Key
 
@@ -149,6 +172,10 @@ Todo el estado vive en `~/.config/wallpaperengine-picker/`:
 - `wallpaperengine_PANTALLA.log` y `pid_PANTALLA.pid` (uno por cada monitor): salida y PID del
   proceso `linux-wallpaperengine` de esa pantalla (util para ver por que un wallpaper concreto
   no carga o hace crashear el motor).
+- `hidden.json`: lista de ids de wallpapers ocultos.
+- `playlists.json`: listas de rotacion por pantalla, `{ "PANTALLA": {"enabled": bool,
+  "interval_minutes": N, "items": [id, ...], "current_index": N, "last_switch": epoch} }`.
+  La edita la ventana "Rotacion..." y la lee el demonio `wallpaperengine-rotate`.
 
 Las miniaturas se cachean en `~/.cache/wallpaperengine-picker/` (se pueden borrar sin
 problema, se regeneran solas).

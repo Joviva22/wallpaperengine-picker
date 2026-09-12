@@ -30,6 +30,7 @@ fi
 
 ln -sf "$REPO_DIR/bin/wallpaperengine-apply" "$BIN_DIR/wallpaperengine-apply"
 ln -sf "$REPO_DIR/bin/wallpaperengine-picker" "$BIN_DIR/wallpaperengine-picker"
+ln -sf "$REPO_DIR/bin/wallpaperengine-rotate" "$BIN_DIR/wallpaperengine-rotate"
 
 cat > "$APPS_DIR/wallpaperengine-picker.desktop" <<EOF
 [Desktop Entry]
@@ -54,4 +55,18 @@ Terminal=false
 NoDisplay=true
 EOF
 
+cat > "$AUTOSTART_DIR/wallpaperengine-rotate.desktop" <<EOF
+[Desktop Entry]
+Type=Application
+Name=Wallpaper Engine Rotation Daemon
+Comment=Avanza las listas de rotacion de wallpapers configuradas por pantalla
+Exec=$BIN_DIR/wallpaperengine-rotate
+Icon=preferences-desktop-wallpaper
+X-KDE-autostart-phase=2
+Terminal=false
+NoDisplay=true
+EOF
+
 echo "Instalado. Lanza 'wallpaperengine-picker' o buscalo en el menu de aplicaciones como 'Elegir Fondo (Wallpaper Engine)'."
+echo "El demonio de rotacion (wallpaperengine-rotate) arrancara solo en el proximo inicio de sesion;"
+echo "para probarlo ahora mismo, ejecutalo en segundo plano: nohup $BIN_DIR/wallpaperengine-rotate >/dev/null 2>&1 &"
