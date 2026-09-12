@@ -290,6 +290,11 @@ def load_wallpapers():
         except Exception:
             title, preview, tags, rating, wtype = entry, "", [], "Desconocido", "Desconocido"
 
+        # Wallpaper Engine no es consistente con las mayusculas de "type"
+        # ("scene" vs "Scene", "video" vs "Video"...); lo normalizamos aqui
+        # una sola vez para que todo el resto de la app compare de forma fiable.
+        wtype = wtype.strip().capitalize() if isinstance(wtype, str) and wtype.strip() else "Desconocido"
+
         thumb_path = os.path.join(CACHE_DIR, f"{entry}.png")
         has_cached_thumb = os.path.isfile(thumb_path)
         preview_path = os.path.join(folder, preview) if preview else ""

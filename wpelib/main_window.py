@@ -545,7 +545,10 @@ class PickerWindow(Gtk.Window):
         if self.current_tab == "Recientes":
             return wid in self.recent_ids
         if self.current_tab == "Animados":
-            return item.get("type") == "Video"
+            # "Scene" puede o no tener movimiento (Wallpaper Engine no expone un
+            # flag fiable de estatico/animado); "Video" y "Web" si son siempre
+            # dinamicos, asi que la pestana se limita a esos dos tipos.
+            return item.get("type") in ("Video", "Web")
         if self.show_hidden_check.get_active():
             return True
         return wid not in self.hidden_ids  # "Todos"
