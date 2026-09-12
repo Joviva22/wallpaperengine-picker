@@ -6,11 +6,22 @@ Selector grafico de fondos de pantalla animados para Linux, basado en
 > Existe una version hermana sin dependencias externas (sin API ni `steamcmd`), que abre el
 > Workshop en el propio Steam para suscribirte: [wallpaperengine-picker-local](https://github.com/Joviva22/wallpaperengine-picker-local).
 
-- Miniaturas reales de cada wallpaper (generadas a partir del preview de Steam Workshop).
-- Asignacion de un wallpaper **distinto por cada monitor**.
-- Filtros por titulo, etiqueta y clasificacion de contenido (Everyone / Questionable / Mature).
+- Interfaz con **sidebar + cuadricula + panel de detalle** (Biblioteca / Favoritos / Recientes
+  / Animados / Ocultos / Workshop), miniaturas reales en 16:9, y una tarjeta por wallpaper con
+  favorito, insignias y acciones al pasar el raton.
+- Asignacion de un wallpaper **distinto por cada monitor**, con vista previa grande, menu
+  contextual, y atajos de teclado.
+- Filtros combinables por titulo, etiqueta (Y) y clasificacion de contenido (O) — Everyone /
+  Questionable / Mature.
 - Busqueda y descarga de nuevos wallpapers **directamente desde el Workshop de Steam**, usando
-  la Steam Web API y `steamcmd` (sin necesidad de abrir el cliente de Steam).
+  la Steam Web API y `steamcmd` (sin necesidad de abrir el cliente de Steam), con la misma
+  interfaz de sidebar/cuadricula/detalle.
+- Favoritos y "Recientes" (historial de lo ultimo aplicado), ocultar sin borrar, y
+  desuscribirse (borra local + opcion de completar el unsubscribe real en Steam).
+- Rotacion automatica de wallpapers por pantalla (con presets de intervalo, rellenar con
+  favoritos, orden aleatorio) mediante un demonio en segundo plano.
+- Icono de bandeja del sistema con accesos rapidos, y deteccion automatica de wallpapers que
+  hacen crashear el motor.
 - Autostart en KDE Plasma: recuerda la ultima configuracion por pantalla y la reaplica al
   iniciar sesion.
 
@@ -98,33 +109,68 @@ apuntan al repo.
 
 ## Uso
 
-Lanza la app desde el menu de aplicaciones o con:
+Lanza la app desde el menu de aplicaciones ("Elegir Fondo (Wallpaper Engine)") o con:
 
 ```bash
 wallpaperengine-picker
 ```
 
-- **Buscar / Etiqueta / Clasificacion**: filtran la lista de wallpapers ya descargados.
-- **Configurando pantalla**: elige a que monitor se aplicara el siguiente wallpaper que
-  selecciones (cada monitor puede tener uno distinto).
-- Doble clic en un wallpaper (o boton "Asignar a esta pantalla") lo aplica de inmediato al
-  monitor seleccionado, sin afectar a los demas.
-- **Refrescar lista**: vuelve a leer la carpeta de Workshop (por si suscribiste algo nuevo
-  desde Steam).
-- **Buscar en Workshop (API)**: abre una ventana para buscar wallpapers directamente en el
-  Workshop de Steam y descargarlos con `steamcmd`. La primera vez pedira tu Steam Web API
-  Key (ver abajo).
-- **Mostrar ocultos** / **Ocultar/Mostrar**: oculta wallpapers que no quieras ver en la lista
-  (por ejemplo, uno que no renderiza bien) sin borrarlos del disco. Se guardan en
-  `hidden.json`; activa "Mostrar ocultos" para volver a verlos (marcados como "[Oculto]") y
-  poder deshacerlo.
-- **Rotacion...**: abre la ventana de listas de rotacion (ver seccion siguiente).
-- **Desuscribirse**: borra el contenido local de los wallpapers seleccionados (ver seccion
-  "Desuscribirse y borrar" mas abajo).
-- Puedes seleccionar **varios wallpapers a la vez** (Ctrl+clic o arrastrando) para ocultarlos
-  o desuscribirte de todos de una vez; "Asignar a esta pantalla" sigue requiriendo uno solo.
-- Cualquier wallpaper que haya hecho crashear el motor se marca solo como
-  "[⚠ Fallo conocido]" (ver "Deteccion de wallpapers problematicos" mas abajo).
+La ventana principal ("Fondos de pantalla") se organiza en tres zonas:
+
+### Sidebar (izquierda)
+
+- **Biblioteca / Favoritos / Recientes / Animados / Ocultos**: pestañas de navegacion.
+  Biblioteca es la vista por defecto (todo lo descargado, sin lo oculto); Animados filtra a
+  wallpapers de tipo Video o Web (los unicos que Wallpaper Engine garantiza que se mueven —
+  una escena "Scene" puede o no tener movimiento y no hay forma fiable de saberlo de
+  antemano).
+- **Workshop**: abre la ventana de busqueda del Workshop (ver mas abajo).
+- **Monitores**: lista de pantallas conectadas, cada una con el titulo del wallpaper que
+  tiene puesto ahora mismo. Clicar una la marca como "pantalla activa" (a la que se aplicara
+  el siguiente wallpaper que elijas); lo mismo hacen los chips "MONITOR ACTIVO" arriba del
+  todo en el panel central.
+- **Ajustes**: muestra la ruta detectada de tu biblioteca de Steam y donde se cachean las
+  miniaturas.
+
+### Panel central
+
+- Buscador grande (`Ctrl+F` o `Ctrl+K` le da el foco, `Esc` lo vacia), un boton **"Filtros
+  (N)"** que despliega etiquetas (deben coincidir todas) y clasificacion (basta una), y un
+  combo de orden.
+- Cada tarjeta muestra la miniatura en 16:9, un corazon de favorito, una insignia si esta
+  oculta o si crasheo el motor ("[⚠ Fallo conocido]"), y un check morado si es el wallpaper
+  actual de la pantalla activa. Al pasar el raton aparecen botones de vista previa y asignar
+  directamente sobre la miniatura; hay tambien un boton "..." que abre el mismo menu que el
+  clic derecho (asignar a cada monitor, favorito, vista previa, anadir a rotacion,
+  ocultar/mostrar, desuscribirse).
+- Doble clic en una tarjeta la aplica de inmediato a la pantalla activa.
+- Puedes seleccionar **varios wallpapers a la vez** (Ctrl+clic o arrastrando) y usar el menu
+  de acciones en lote (icono "⋮" de la barra inferior) para ocultarlos/desuscribirlos juntos;
+  `Supr` oculta la seleccion actual.
+- Barra inferior: contador de resultados/seleccion, **"Mostrar ocultos"** (los incluye tambien
+  dentro de "Biblioteca", ademas de en su propia pestaña), **"Rotacion"**, el menu de acciones
+  en lote, y **"Actualizar"** (vuelve a leer la carpeta del Workshop, por si suscribiste algo
+  nuevo desde Steam).
+
+### Panel de detalle (derecha)
+
+Se despliega al seleccionar una tarjeta: vista previa grande, titulo, favorito, botones
+"Asignar a `<pantalla activa>`" / "Vista previa" / "Anadir a rotacion" / "Ocultar" /
+"Desuscribirse", y una seccion de informacion (tipo, categorias, clasificacion, fecha de
+descarga) con las etiquetas del wallpaper debajo.
+
+### Buscar en el Workshop
+
+La ventana de busqueda ("Workshop" en la sidebar) usa el mismo lenguaje visual: sidebar con
+Etiquetas (deben coincidir todas), Clasificacion y Popularidad (Todo el tiempo / Hoy / Semana
+/ Mes / Medio año / Año — mas votados o en tendencia segun la que elijas), un buscador grande
+con paginacion junto a el, y una cuadricula de tarjetas identica a la de la biblioteca. El
+tamaño del archivo y si ya lo tienes descargado se muestran como texto/insignia separados del
+titulo (no mezclados como antes). Al seleccionar un resultado se abre el panel de detalle con
+**"Ir a Steam"** (accion principal — deja que tu cuenta real se encargue, mas fiable) y
+**"Descargar"** (usa `steamcmd` con login anonimo, ver mas abajo); tambien puedes marcar
+resultados como favoritos antes de descargarlos. La pagina siguiente se precarga en segundo
+plano para que "Pagina siguiente" sea practicamente instantaneo.
 
 ### Icono de bandeja
 
@@ -157,10 +203,12 @@ a probar ese mismo id y esta vez no crashea, la marca se quita sola.
 Cada pantalla puede tener, en vez de un unico wallpaper fijo, una lista de wallpapers que
 van rotando solos cada cierto tiempo:
 
-1. Pulsa **"Rotacion..."**, elige la pantalla a configurar.
+1. Pulsa **"Rotacion"** (barra inferior), elige la pantalla a configurar.
 2. Anade wallpapers desde "Disponibles" a "Orden de rotacion" (boton "Anadir"), reordena con
-   "Subir"/"Bajar" y quita los que no quieras con "Quitar".
-3. Marca "Activar rotacion en esta pantalla" y ajusta el intervalo en minutos.
+   "Subir"/"Bajar" y quita los que no quieras con "Quitar". "Rellenar con favoritos" anade de
+   golpe todo lo que tengas marcado con corazon; "Aleatorizar orden" baraja la lista actual.
+3. Marca "Activar rotacion en esta pantalla" y ajusta el intervalo en minutos (o usa uno de
+   los presets: 15 min / 30 min / 1 hora / 1 dia).
 4. Pulsa "Guardar y aplicar": aplica el primer wallpaper de la lista de inmediato y guarda la
    configuracion en `~/.config/wallpaperengine-picker/playlists.json`.
 
@@ -177,7 +225,7 @@ que requiere una API key gratuita asociada a tu cuenta:
 
 1. Ve a <https://steamcommunity.com/dev/apikey> y genera una key (como dominio puedes poner
    `localhost`).
-2. Pegala cuando la app te la pida al abrir "Buscar en Workshop (API)", **o** guardala tu
+2. Pegala cuando la app te la pida al abrir "Workshop" desde la sidebar, **o** guardala tu
    mismo sin que pase por ningun chat/terminal compartido:
 
    ```bash
@@ -208,8 +256,8 @@ steamcmd +force_install_dir <tu_biblioteca_de_steam> \
 
 Esto funciona para la mayoria del contenido del Workshop de Wallpaper Engine sin necesidad
 de iniciar sesion con tu cuenta real. Si algun item en concreto no se puede descargar asi,
-sigue pudiendo suscribirte a el desde el propio Steam (el boton "Refrescar lista" recogera
-cualquier wallpaper que hayas suscrito por ese medio).
+sigue pudiendo suscribirte a el desde el propio Steam (el boton "Actualizar" de la ventana
+principal recogera cualquier wallpaper que hayas suscrito por ese medio).
 
 ## Configuracion
 
@@ -224,6 +272,12 @@ Todo el estado vive en `~/.config/wallpaperengine-picker/`:
   proceso `linux-wallpaperengine` de esa pantalla (util para ver por que un wallpaper concreto
   no carga o hace crashear el motor).
 - `hidden.json`: lista de ids de wallpapers ocultos.
+- `favorites.json`: lista de ids marcados con favorito (compartida entre la biblioteca local
+  y los resultados del Workshop).
+- `recents.json`: ids aplicados recientemente, mas reciente primero (hasta 100), para la
+  pestaña "Recientes".
+- `ui_state.json`: pestaña, orden y filtro de clasificacion activos, y la pantalla activa —
+  se restauran solos al reabrir la app.
 - `playlists.json`: listas de rotacion por pantalla, `{ "PANTALLA": {"enabled": bool,
   "interval_minutes": N, "items": [id, ...], "current_index": N, "last_switch": epoch} }`.
   La edita la ventana "Rotacion..." y la lee el demonio `wallpaperengine-rotate`.
@@ -249,12 +303,21 @@ problema, se regeneran solas).
 - Probado sobre Wayland (KWin) usando XWayland para `xrandr`; en un compositor puramente
   wlroots (Sway, Hyprland...) puedes pasar `--layer background` a `linux-wallpaperengine`
   directamente si lo necesitas (no expuesto aun en la interfaz).
+- La pestaña "Animados" solo detecta tipos `Video`/`Web`; una escena `Scene` puede tener
+  movimiento (parallax, particulas...) y no aparecera ahi porque `project.json` no expone
+  ningun flag fiable de estatico/animado para ese tipo.
+- No hay alternancia real cuadricula/lista, las etiquetas del panel de detalle son de solo
+  lectura, y no se muestra la resolucion del wallpaper (Wallpaper Engine no la expone de
+  forma fiable en `project.json`). La ventana no tiene una barra de titulo/logo propios;
+  usa la del gestor de ventanas.
 
 ## Roadmap de diseño
 
-[`docs/Mejoras.md`](docs/Mejoras.md) recoge una propuesta detallada de rediseño visual
-(mas densidad en la cuadricula, buscador protagonista, favoritos, vista previa grande,
-menu contextual...) pendiente de implementar.
+La interfaz sigue el rediseño propuesto en [`docs/Mejoras.md`](docs/Mejoras.md) (ventana
+principal: sidebar, cuadricula de tarjetas, panel de detalle) y en
+[`docs/WorkShop.md`](docs/WorkShop.md) (misma distribucion aplicada a la busqueda del
+Workshop). Las desviaciones conocidas respecto a esas propuestas estan listadas en "Notas y
+limitaciones" arriba.
 
 ## Licencia
 
