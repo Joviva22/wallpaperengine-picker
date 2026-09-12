@@ -31,6 +31,13 @@ fi
 ln -sf "$REPO_DIR/bin/wallpaperengine-apply" "$BIN_DIR/wallpaperengine-apply"
 ln -sf "$REPO_DIR/bin/wallpaperengine-picker" "$BIN_DIR/wallpaperengine-picker"
 ln -sf "$REPO_DIR/bin/wallpaperengine-rotate" "$BIN_DIR/wallpaperengine-rotate"
+ln -sf "$REPO_DIR/bin/wallpaperengine-tray" "$BIN_DIR/wallpaperengine-tray"
+
+if ! python3 -c "import gi; gi.require_version('AyatanaAppIndicator3','0.1')" 2>/dev/null \
+   && ! python3 -c "import gi; gi.require_version('AppIndicator3','0.1')" 2>/dev/null; then
+    echo "Aviso: sin libayatana-appindicator (ni AppIndicator3), el icono de bandeja usara"
+    echo "Gtk.StatusIcon como respaldo, que puede no mostrarse en todos los escritorios."
+fi
 
 cat > "$APPS_DIR/wallpaperengine-picker.desktop" <<EOF
 [Desktop Entry]
@@ -67,6 +74,20 @@ Terminal=false
 NoDisplay=true
 EOF
 
+cat > "$AUTOSTART_DIR/wallpaperengine-tray.desktop" <<EOF
+[Desktop Entry]
+Type=Application
+Name=Wallpaper Engine Picker (bandeja)
+Comment=Icono de bandeja con accesos rapidos (sin abrir la ventana completa)
+Exec=$BIN_DIR/wallpaperengine-tray
+Icon=preferences-desktop-wallpaper
+X-KDE-autostart-phase=2
+Terminal=false
+NoDisplay=true
+EOF
+
 echo "Instalado. Lanza 'wallpaperengine-picker' o buscalo en el menu de aplicaciones como 'Elegir Fondo (Wallpaper Engine)'."
-echo "El demonio de rotacion (wallpaperengine-rotate) arrancara solo en el proximo inicio de sesion;"
-echo "para probarlo ahora mismo, ejecutalo en segundo plano: nohup $BIN_DIR/wallpaperengine-rotate >/dev/null 2>&1 &"
+echo "El demonio de rotacion y el icono de bandeja arrancaran solos en el proximo inicio de sesion;"
+echo "para probarlos ahora mismo:"
+echo "  nohup $BIN_DIR/wallpaperengine-rotate >/dev/null 2>&1 &"
+echo "  nohup $BIN_DIR/wallpaperengine-tray >/dev/null 2>&1 &"

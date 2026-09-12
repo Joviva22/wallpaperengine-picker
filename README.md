@@ -45,6 +45,7 @@ Paquetes necesarios (nombres para Arch/CachyOS, vía `pacman`/AUR):
 | `python-pillow` | oficial | Generar las miniaturas |
 | `jq` | oficial | Manejo de JSON en los scripts de shell |
 | `xorg-xrandr` | oficial | Detectar monitores conectados |
+| `libayatana-appindicator` | oficial | Icono de bandeja (opcional; sin ella cae a `Gtk.StatusIcon`) |
 
 Instalacion con `paru` (o `yay`):
 
@@ -100,6 +101,38 @@ wallpaperengine-picker
   `hidden.json`; activa "Mostrar ocultos" para volver a verlos (marcados como "[Oculto]") y
   poder deshacerlo.
 - **Rotacion...**: abre la ventana de listas de rotacion (ver seccion siguiente).
+- **Desuscribirse**: borra el contenido local de los wallpapers seleccionados (ver seccion
+  "Desuscribirse y borrar" mas abajo).
+- Puedes seleccionar **varios wallpapers a la vez** (Ctrl+clic o arrastrando) para ocultarlos
+  o desuscribirte de todos de una vez; "Asignar a esta pantalla" sigue requiriendo uno solo.
+- Cualquier wallpaper que haya hecho crashear el motor se marca solo como
+  "[⚠ Fallo conocido]" (ver "Deteccion de wallpapers problematicos" mas abajo).
+
+### Icono de bandeja
+
+`wallpaperengine-tray` (autostart) añade un icono a la bandeja del sistema con accesos
+rapidos sin abrir la ventana completa: wallpaper aleatorio por pantalla, pausar/reanudar la
+rotacion automatica, y un enlace para abrir el selector completo. Usa
+`libayatana-appindicator` si esta disponible; si no, cae a `Gtk.StatusIcon` (puede no
+mostrarse en todos los escritorios).
+
+### Desuscribirse y borrar
+
+"Desuscribirse" borra el contenido local (y su cache de miniaturas) de los wallpapers
+seleccionados y los quita de cualquier lista de rotacion. El login anonimo que usa la
+descarga por API **no puede** desuscribir tu cuenta real de Steam (esa suscripcion vive en
+el servidor, ligada a tu cuenta), asi que el dialogo te deja elegir "Borrar y abrir en
+Steam" para completar el desuscribir de verdad alli si no quieres que se vuelva a
+sincronizar mas adelante.
+
+### Deteccion de wallpapers problematicos
+
+Algunas escenas del Workshop hacen que `linux-wallpaperengine` termine con una excepcion
+C++ no capturada (o un segfault) al intentar renderizarlas. Cada vez que se aplica un
+wallpaper, `wallpaperengine-apply` vigila el proceso durante unos segundos: si muere con una
+de esas señales tipicas, guarda el id en `known_bad.json` y la app lo marca como
+"[⚠ Fallo conocido]" tanto en la lista local como en los resultados del Workshop. Si vuelves
+a probar ese mismo id y esta vez no crashea, la marca se quita sola.
 
 ### Rotacion automatica de wallpapers
 
@@ -176,6 +209,10 @@ Todo el estado vive en `~/.config/wallpaperengine-picker/`:
 - `playlists.json`: listas de rotacion por pantalla, `{ "PANTALLA": {"enabled": bool,
   "interval_minutes": N, "items": [id, ...], "current_index": N, "last_switch": epoch} }`.
   La edita la ventana "Rotacion..." y la lee el demonio `wallpaperengine-rotate`.
+- `known_bad.json`: ids que hicieron crashear el motor, `{ "id": {"screen": ..., "detected_at":
+  ...} }`. La escribe `wallpaperengine-apply`, la lee la app para marcarlos en la lista.
+- `rotation_paused`: si existe (archivo vacio), el demonio de rotacion no avanza ninguna
+  pantalla. Lo crea/borra el icono de bandeja al pulsar "Pausar/Reanudar rotacion".
 
 Las miniaturas se cachean en `~/.cache/wallpaperengine-picker/` (se pueden borrar sin
 problema, se regeneran solas).

@@ -1,0 +1,141 @@
+#!/usr/bin/env python3
+"""Icono de bandeja para acciones rapidas de Wallpaper Engine Picker sin abrir
+la ventana completa: wallpaper aleatorio por pantalla, pausar/reanudar la
+rotacion automatica, y un acceso directo al selector completo."""
+import json
+import os
+import random
+import subprocess
+
+import gi
+
+gi.require_version("Gtk", "3.0")
+from gi.repository import Gtk
+
+HAVE_INDICATOR = False
+try:
+    gi.require_version("AyatanaAppIndicator3", "0.1")
+    from gi.repository import AyatanaAppIndicator3 as AppIndicator3
+    HAVE_INDICATOR = True
+except (ValueError, ImportError):
+    try:
+        gi.require_version("AppIndicator3", "0.1")
+        from gi.repository import AppIndicator3
+        HAVE_INDICATOR = True
+    except (ValueError, ImportError):
+        HAVE_INDICATOR = False
+
+APPID = "431960"
+CONF_DIR = os.path.expanduser("~/.config/wallpaperengine-picker")
+CONFIG_FILE = os.path.join(CONF_DIR, "config.json")
+PAUSE_FILE = os.path.join(CONF_DIR, "rotation_paused")
+PICKER_BIN = os.path.expanduser("~/.local/bin/wallpaperengine-picker")
+APPLY_BIN = os.path.expanduser("~/.local/bin/wallpaperengine-apply")
+
+
+def detect_monitors():
+    try:
+        out = subprocess.check_output(["xrandr", "--listmonitors"], text=True, stderr=subprocess.DEVNULL)
+    except Exception:
+        return []
+    lines = out.strip().splitlines()[1:]
+    return [line.split()[-1] for line in lines if line.strip()]
+
+
+def get_steam_library():
+    try:
+        with open(CONFIG_FILE, encoding="utf-8") as f:
+            return json.load(f).get("steam_library")
+    except Exception:
+        return None
+
+
+def list_local_ids():
+    steam_lib = get_steam_library()
+    if not steam_lib:
+        return []
+    workshop_dir = os.path.join(steam_lib, "steamapps", "workshop", "content", APPID)
+    if not os.path.isdir(workshop_dir):
+        return []
+    return [
+        entry for entry in os.listdir(workshop_dir)
+        if os.path.isfile(os.path.join(workshop_dir, entry, "project.json"))
+    ]
+
+
+def apply_random(monitor):
+    ids = list_local_ids()
+    if not ids:
+        return
+    subprocess.Popen([APPLY_BIN, f"{monitor}={random.choice(ids)}"])
+
+
+def toggle_pause():
+    os.makedirs(CONF_DIR, exist_ok=True)
+    if os.path.isfile(PAUSE_FILE):
+        os.remove(PAUSE_FILE)
+    else:
+        open(PAUSE_FILE, "w").close()
+
+
+def build_menu():
+    menu = Gtk.Menu()
+
+    open_item = Gtk.MenuItem(label="Abrir selector completo")
+    open_item.connect("activate", lambda *_: subprocess.Popen([PICKER_BIN]))
+    menu.append(open_item)
+
+    monitors = detect_monitors()
+    if monitors:
+        menu.append(Gtk.SeparatorMenuItem())
+        for mon in monitors:
+            item = Gtk.MenuItem(label=f"Wallpaper aleatorio en {mon}")
+            item.connect("activate", lambda _btn, m=mon: apply_random(m))
+            menu.append(item)
+
+    menu.append(Gtk.SeparatorMenuItem())
+    pause_item = Gtk.MenuItem()
+    pause_item.connect("activate", lambda *_: toggle_pause())
+    menu.append(pause_item)
+
+    menu.append(Gtk.SeparatorMenuItem())
+    quit_item = Gtk.MenuItem(label="Salir (solo el icono de bandeja)")
+    quit_item.connect("activate", lambda *_: Gtk.main_quit())
+    menu.append(quit_item)
+
+    def refresh_pause_label(*_args):
+        paused = os.path.isfile(PAUSE_FILE)
+        pause_item.set_label("Reanudar rotacion" if paused else "Pausar rotacion")
+
+    refresh_pause_label()
+    menu.connect("show", refresh_pause_label)
+    menu.show_all()
+    return menu
+
+
+def main():
+    menu = build_menu()
+
+    if HAVE_INDICATOR:
+        indicator = AppIndicator3.Indicator.new(
+            "wallpaperengine-picker", "preferences-desktop-wallpaper",
+            AppIndicator3.IndicatorCategory.APPLICATION_STATUS,
+        )
+        indicator.set_status(AppIndicator3.IndicatorStatus.ACTIVE)
+        indicator.set_title("Wallpaper Engine Picker")
+        indicator.set_menu(menu)
+    else:
+        icon = Gtk.StatusIcon()
+        icon.set_from_icon_name("preferences-desktop-wallpaper")
+        icon.set_tooltip_text("Wallpaper Engine Picker")
+        icon.connect("activate", lambda *_: subprocess.Popen([PICKER_BIN]))
+        icon.connect(
+            "popup-menu",
+            lambda i, b, t: menu.popup(None, None, Gtk.StatusIcon.position_menu, i, b, t),
+        )
+
+    Gtk.main()
+
+
+if __name__ == "__main__":
+    main()

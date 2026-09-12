@@ -9,12 +9,17 @@ source "$SCRIPT_DIR/wallpaperengine-common.sh"
 
 CONF_DIR="$WPE_CONF_DIR"
 PLAYLISTS_FILE="$CONF_DIR/playlists.json"
+PAUSE_FILE="$CONF_DIR/rotation_paused"
 APPLY="$SCRIPT_DIR/wallpaperengine-apply"
 POLL_SECONDS=30
 
 mkdir -p "$CONF_DIR"
 
 while true; do
+    if [[ -f "$PAUSE_FILE" ]]; then
+        sleep "$POLL_SECONDS"
+        continue
+    fi
     if [[ -f "$PLAYLISTS_FILE" ]]; then
         now=$(date +%s)
         for screen in $(jq -r 'keys[]' "$PLAYLISTS_FILE" 2>/dev/null); do
