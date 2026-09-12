@@ -7,7 +7,7 @@ Selector grafico de fondos de pantalla animados para Linux, basado en
 > Workshop en el propio Steam para suscribirte: [wallpaperengine-picker-local](https://github.com/Joviva22/wallpaperengine-picker-local).
 
 - Interfaz con **sidebar + cuadricula + panel de detalle** (Biblioteca / Favoritos / Recientes
-  / Animados / Ocultos / Workshop), miniaturas reales en 16:9, y una tarjeta por wallpaper con
+  / Animados / Ocultos / Workshop), miniaturas reales en formato cuadrado (1:1), y una tarjeta por wallpaper con
   favorito, insignias y acciones al pasar el raton.
 - Asignacion de un wallpaper **distinto por cada monitor**, con vista previa grande, menu
   contextual, y atajos de teclado.
@@ -137,7 +137,7 @@ La ventana principal ("Fondos de pantalla") se organiza en tres zonas:
 - Buscador grande (`Ctrl+F` o `Ctrl+K` le da el foco, `Esc` lo vacia), un boton **"Filtros
   (N)"** que despliega etiquetas (deben coincidir todas) y clasificacion (basta una), y un
   combo de orden.
-- Cada tarjeta muestra la miniatura en 16:9, un corazon de favorito, una insignia si esta
+- Cada tarjeta muestra la miniatura en formato cuadrado (1:1), un corazon de favorito, una insignia si esta
   oculta o si crasheo el motor ("[⚠ Fallo conocido]"), y un check morado si es el wallpaper
   actual de la pantalla activa. Al pasar el raton aparecen botones de vista previa y asignar
   directamente sobre la miniatura; hay tambien un boton "..." que abre el mismo menu que el

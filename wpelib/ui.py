@@ -8,7 +8,7 @@ import gi
 gi.require_version("Gtk", "3.0")
 from gi.repository import Gtk, GLib, Gdk, Pango
 
-CARD_SIZE = (320, 180)  # 16:9 exacto; debe coincidir con THUMB_SIZE en wpelib/config.py
+CARD_SIZE = (320, 320)  # 1:1; debe coincidir con THUMB_SIZE en wpelib/config.py
 
 APP_CSS = """
 @define-color wpe_bg #1c1d24;

@@ -20,10 +20,10 @@ UI_STATE_FILE = os.path.join(CONF_DIR, "ui_state.json")
 PLAYLISTS_FILE = os.path.join(CONF_DIR, "playlists.json")
 KNOWN_BAD_FILE = os.path.join(CONF_DIR, "known_bad.json")
 MAX_RECENTS = 100
-CACHE_DIR = os.path.expanduser("~/.cache/wallpaperengine-picker/thumbs_v3")
+CACHE_DIR = os.path.expanduser("~/.cache/wallpaperengine-picker/thumbs_v5")
 WORKSHOP_THUMB_CACHE = os.path.expanduser("~/.cache/wallpaperengine-picker/workshop_thumbs")
 APPLY_SCRIPT = os.path.expanduser("~/.local/bin/wallpaperengine-apply")
-THUMB_SIZE = (320, 180)  # 16:9 exacto; debe coincidir con CARD_SIZE en wpelib/ui.py
+THUMB_SIZE = (320, 320)  # 1:1; debe coincidir con CARD_SIZE en wpelib/ui.py
 DEFAULT_ID = "2168640648"
 STEAM_API_QUERYFILES = "https://api.steampowered.com/IPublishedFileService/QueryFiles/v1/"
 
