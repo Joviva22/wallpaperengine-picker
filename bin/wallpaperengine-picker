@@ -163,6 +163,29 @@ def save_playlists(data):
         json.dump(data, f, indent=2)
 
 
+def unsubscribe_workshop_item(wid):
+    """Borra el contenido local del wallpaper y lo quita de cualquier lista de
+    rotacion. No es un unsubscribe real en Steam (eso requiere el cliente
+    autenticado con tu cuenta); solo limpia lo que tenemos en disco/config."""
+    folder = os.path.join(WORKSHOP_DIR, wid)
+    if os.path.isdir(folder):
+        shutil.rmtree(folder, ignore_errors=True)
+
+    thumb = os.path.join(CACHE_DIR, f"{wid}.png")
+    if os.path.isfile(thumb):
+        os.remove(thumb)
+
+    playlists = load_playlists()
+    changed = False
+    for data in playlists.values():
+        items = data.get("items", [])
+        if wid in items:
+            data["items"] = [i for i in items if i != wid]
+            changed = True
+    if changed:
+        save_playlists(playlists)
+
+
 def build_thumb(preview_path, dest_path):
     try:
         img = Image.open(preview_path)
@@ -1266,6 +1289,10 @@ class PickerWindow(Gtk.Window):
         playlist_btn.connect("clicked", self.on_open_playlist_window)
         button_box.pack_end(playlist_btn, False, False, 0)
 
+        unsubscribe_btn = icon_button("Desuscribirse", "user-trash-symbolic")
+        unsubscribe_btn.connect("clicked", self.on_unsubscribe_clicked)
+        button_box.pack_end(unsubscribe_btn, False, False, 0)
+
         self.placeholder_pixbuf = GdkPixbuf.Pixbuf.new(GdkPixbuf.Colorspace.RGB, False, 8, *THUMB_SIZE)
         self.placeholder_pixbuf.fill(0x2f3140ff)
 
@@ -1358,6 +1385,46 @@ class PickerWindow(Gtk.Window):
         self.rebuild_store()
         self.refilter()
         self.status_label.set_text(f"{action}: {self.titles_by_id.get(wid, wid)}")
+
+    def on_unsubscribe_clicked(self, button):
+        wid = self.get_selected_id()
+        if not wid:
+            self.status_label.set_text("Selecciona un wallpaper primero")
+            return
+        title = self.titles_by_id.get(wid, wid)
+
+        used_on = [mon for mon, vid in self.assignments.items() if vid == wid]
+        warning = f"\n\nAviso: esta aplicado actualmente en: {', '.join(used_on)}." if used_on else ""
+
+        dialog = Gtk.MessageDialog(
+            transient_for=self, modal=True, message_type=Gtk.MessageType.WARNING,
+            text="Desuscribirse y borrar este wallpaper",
+        )
+        dialog.format_secondary_text(
+            f"Se borrara el contenido local de '{title}'.{warning}\n\n"
+            "Esto NO desuscribe tu cuenta real de Steam (el login anonimo que usa la "
+            "descarga no puede hacerlo). Si no quieres que Steam lo vuelva a "
+            "descargar mas adelante, abrelo en Steam y pulsa 'Unsubscribe' alli con tu cuenta."
+        )
+        dialog.add_buttons(
+            "Cancelar", Gtk.ResponseType.CANCEL,
+            "Solo borrar local", Gtk.ResponseType.OK,
+            "Borrar y abrir en Steam", Gtk.ResponseType.APPLY,
+        )
+        response = dialog.run()
+        dialog.destroy()
+
+        if response not in (Gtk.ResponseType.OK, Gtk.ResponseType.APPLY):
+            return
+
+        unsubscribe_workshop_item(wid)
+        self.hidden_ids.discard(wid)
+        save_hidden_ids(self.hidden_ids)
+        self.on_refresh_clicked()
+        self.status_label.set_text(f"Borrado localmente: {title}")
+
+        if response == Gtk.ResponseType.APPLY:
+            open_in_steam(wid)
 
     def on_target_monitor_toggled(self, radio, mon):
         if radio.get_active():
