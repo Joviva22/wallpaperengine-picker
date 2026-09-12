@@ -184,10 +184,10 @@ def load_wallpapers():
 
 
 SORT_OPTIONS = {
-    "Titulo (A-Z)": lambda item: item["title"].lower(),
-    "Titulo (Z-A)": lambda item: item["title"].lower(),
     "Mas reciente primero": lambda item: -item["mtime"],
     "Mas antiguo primero": lambda item: item["mtime"],
+    "Titulo (A-Z)": lambda item: item["title"].lower(),
+    "Titulo (Z-A)": lambda item: item["title"].lower(),
 }
 SORT_REVERSE = {"Titulo (Z-A)": True}
 
