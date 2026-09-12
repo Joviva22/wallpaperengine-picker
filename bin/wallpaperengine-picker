@@ -26,6 +26,7 @@ CONFIG_FILE = os.path.join(CONF_DIR, "config.json")
 CURRENT_FILE = os.path.join(CONF_DIR, "current.json")
 HIDDEN_FILE = os.path.join(CONF_DIR, "hidden.json")
 PLAYLISTS_FILE = os.path.join(CONF_DIR, "playlists.json")
+KNOWN_BAD_FILE = os.path.join(CONF_DIR, "known_bad.json")
 CACHE_DIR = os.path.expanduser("~/.cache/wallpaperengine-picker/thumbs")
 WORKSHOP_THUMB_CACHE = os.path.expanduser("~/.cache/wallpaperengine-picker/workshop_thumbs")
 APPLY_SCRIPT = os.path.expanduser("~/.local/bin/wallpaperengine-apply")
@@ -129,6 +130,18 @@ def load_current_assignments(monitors):
     for mon in monitors:
         assignments.setdefault(mon, DEFAULT_ID)
     return assignments
+
+
+def load_known_bad():
+    """Ids que hicieron crashear linux-wallpaperengine la ultima vez que se probaron
+    (detectado por wallpaperengine-apply, ver known_bad.json)."""
+    if os.path.isfile(KNOWN_BAD_FILE):
+        try:
+            with open(KNOWN_BAD_FILE, encoding="utf-8") as f:
+                return json.load(f)
+        except Exception:
+            return {}
+    return {}
 
 
 def load_hidden_ids():
@@ -671,6 +684,7 @@ class WorkshopBrowserWindow(Gtk.Window):
         self.rating_by_id = {}
         self.filesize_by_id = {}
         self.title_by_id = {}
+        self.known_bad = load_known_bad()
         self.per_page = 50
         self.current_page = 1
         self.total_results = 0
@@ -877,6 +891,8 @@ class WorkshopBrowserWindow(Gtk.Window):
 
             size_text = format_size(item.get("file_size"))
             display_title = f"{title} ({size_text})"
+            if wid in self.known_bad:
+                display_title = f"[⚠ Fallo conocido] {display_title}"
             if is_already_downloaded(wid):
                 display_title = f"[Ya la tienes] {display_title}"
             self.store.append([pixbuf, display_title, wid])
@@ -1233,6 +1249,7 @@ class PickerWindow(Gtk.Window):
         self.tags_by_id = {}
         self.rating_by_id = {}
         self.hidden_ids = load_hidden_ids()
+        self.known_bad = load_known_bad()
         self.workshop_window = None
         self.playlist_window = None
 
@@ -1302,6 +1319,7 @@ class PickerWindow(Gtk.Window):
         self.filter_model.set_visible_func(self.filter_func)
 
         self.icon_view = Gtk.IconView(model=self.filter_model)
+        self.icon_view.set_selection_mode(Gtk.SelectionMode.MULTIPLE)
         self.icon_view.set_pixbuf_column(0)
         self.icon_view.set_text_column(1)
         self.icon_view.set_item_width(THUMB_SIZE[0] + 20)
@@ -1356,6 +1374,7 @@ class PickerWindow(Gtk.Window):
         GLib.idle_add(self.populate)
 
     def populate(self):
+        self.known_bad = load_known_bad()
         self.all_items = load_wallpapers()
         all_tags = set()
         for item in self.all_items:
@@ -1393,7 +1412,11 @@ class PickerWindow(Gtk.Window):
         ordered = sorted(self.all_items, key=key_func, reverse=SORT_REVERSE.get(sort_choice, False))
         self.store.clear()
         for item in ordered:
-            title = f"[Oculto] {item['title']}" if item["id"] in self.hidden_ids else item["title"]
+            title = item["title"]
+            if item["id"] in self.known_bad:
+                title = f"[⚠ Fallo conocido] {title}"
+            if item["id"] in self.hidden_ids:
+                title = f"[Oculto] {title}"
             self.store.append([item["pixbuf"], title, item["id"]])
 
     def on_sort_changed(self, combo):
@@ -1428,40 +1451,44 @@ class PickerWindow(Gtk.Window):
         self.refilter()
 
     def on_toggle_hidden_clicked(self, button):
-        wid = self.get_selected_id()
-        if not wid:
-            self.status_label.set_text("Selecciona un wallpaper primero")
+        ids = self.get_selected_ids()
+        if not ids:
+            self.status_label.set_text("Selecciona uno o mas wallpapers primero")
             return
-        if wid in self.hidden_ids:
-            self.hidden_ids.discard(wid)
-            action = "Mostrado de nuevo"
-        else:
-            self.hidden_ids.add(wid)
-            action = "Ocultado"
+        # Si la mayoria no estan ocultos, se ocultan todos; si ya lo estaban, se muestran.
+        currently_hidden = sum(1 for wid in ids if wid in self.hidden_ids)
+        make_hidden = currently_hidden < len(ids)
+        for wid in ids:
+            if make_hidden:
+                self.hidden_ids.add(wid)
+            else:
+                self.hidden_ids.discard(wid)
         save_hidden_ids(self.hidden_ids)
         self.rebuild_store()
         self.refilter()
-        self.status_label.set_text(f"{action}: {self.titles_by_id.get(wid, wid)}")
+        action = "Ocultado(s)" if make_hidden else "Mostrado(s) de nuevo"
+        self.status_label.set_text(f"{action}: {len(ids)} wallpaper(s)")
 
     def on_unsubscribe_clicked(self, button):
-        wid = self.get_selected_id()
-        if not wid:
-            self.status_label.set_text("Selecciona un wallpaper primero")
+        ids = self.get_selected_ids()
+        if not ids:
+            self.status_label.set_text("Selecciona uno o mas wallpapers primero")
             return
-        title = self.titles_by_id.get(wid, wid)
 
-        used_on = [mon for mon, vid in self.assignments.items() if vid == wid]
-        warning = f"\n\nAviso: esta aplicado actualmente en: {', '.join(used_on)}." if used_on else ""
+        titles = [self.titles_by_id.get(wid, wid) for wid in ids]
+        used_on = sorted({mon for mon, vid in self.assignments.items() if vid in ids})
+        warning = f"\n\nAviso: hay pantallas usando alguno de estos: {', '.join(used_on)}." if used_on else ""
+        names = ", ".join(titles) if len(titles) <= 3 else f"{len(titles)} wallpapers"
 
         dialog = Gtk.MessageDialog(
             transient_for=self, modal=True, message_type=Gtk.MessageType.WARNING,
-            text="Desuscribirse y borrar este wallpaper",
+            text="Desuscribirse y borrar" + (" este wallpaper" if len(ids) == 1 else f" {len(ids)} wallpapers"),
         )
         dialog.format_secondary_text(
-            f"Se borrara el contenido local de '{title}'.{warning}\n\n"
+            f"Se borrara el contenido local de: {names}.{warning}\n\n"
             "Esto NO desuscribe tu cuenta real de Steam (el login anonimo que usa la "
-            "descarga no puede hacerlo). Si no quieres que Steam lo vuelva a "
-            "descargar mas adelante, abrelo en Steam y pulsa 'Unsubscribe' alli con tu cuenta."
+            "descarga no puede hacerlo). Si no quieres que Steam los vuelva a "
+            "descargar mas adelante, abrelos en Steam y pulsa 'Unsubscribe' alli con tu cuenta."
         )
         dialog.add_buttons(
             "Cancelar", Gtk.ResponseType.CANCEL,
@@ -1474,25 +1501,32 @@ class PickerWindow(Gtk.Window):
         if response not in (Gtk.ResponseType.OK, Gtk.ResponseType.APPLY):
             return
 
-        unsubscribe_workshop_item(wid)
-        self.hidden_ids.discard(wid)
+        for wid in ids:
+            unsubscribe_workshop_item(wid)
+            self.hidden_ids.discard(wid)
         save_hidden_ids(self.hidden_ids)
         self.on_refresh_clicked()
-        self.status_label.set_text(f"Borrado localmente: {title}")
+        self.status_label.set_text(f"Borrado(s) localmente: {len(ids)} wallpaper(s)")
 
         if response == Gtk.ResponseType.APPLY:
-            open_in_steam(wid)
+            for wid in ids:
+                open_in_steam(wid)
 
     def on_target_monitor_toggled(self, radio, mon):
         if radio.get_active():
             self.target_monitor = mon
 
-    def get_selected_id(self):
+    def get_selected_ids(self):
         selected = self.icon_view.get_selected_items()
-        if not selected:
-            return None
-        iter_ = self.filter_model.get_iter(selected[0])
-        return self.filter_model[iter_][2]
+        ids = []
+        for path in selected:
+            iter_ = self.filter_model.get_iter(path)
+            ids.append(self.filter_model[iter_][2])
+        return ids
+
+    def get_selected_id(self):
+        ids = self.get_selected_ids()
+        return ids[0] if ids else None
 
     def assign_and_apply(self, wid):
         self.assignments[self.target_monitor] = wid
@@ -1516,11 +1550,13 @@ class PickerWindow(Gtk.Window):
         self.assign_and_apply(wid)
 
     def on_assign_clicked(self, button):
-        wid = self.get_selected_id()
-        if wid:
-            self.assign_and_apply(wid)
-        else:
+        ids = self.get_selected_ids()
+        if not ids:
             self.status_label.set_text("Selecciona un wallpaper primero")
+        elif len(ids) > 1:
+            self.status_label.set_text("Selecciona un unico wallpaper para asignarlo a una pantalla")
+        else:
+            self.assign_and_apply(ids[0])
 
     def on_open_workshop_browser(self, button):
         if self.workshop_window is None or not self.workshop_window.get_visible():

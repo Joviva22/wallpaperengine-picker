@@ -44,6 +44,29 @@ for pair in "$@"; do
     ASSIGN["$screen"]="$id"
 done
 
+KNOWN_BAD_FILE="$CONF_DIR/known_bad.json"
+
+# Espera un poco tras lanzar un wallpaper y comprueba si el proceso murio con una
+# excepcion/crash tipico del motor; si es asi, lo apunta en known_bad.json para que
+# la app lo marque en la lista. Si sigue vivo y antes estaba marcado, lo desmarca solo.
+watch_for_crash() {
+    local screen="$1" id="$2" pid="$3" logfile="$4"
+    sleep 8
+
+    local current="{}"
+    [[ -s "$KNOWN_BAD_FILE" ]] && current=$(cat "$KNOWN_BAD_FILE")
+
+    if kill -0 "$pid" 2>/dev/null; then
+        echo "$current" | jq --arg id "$id" 'del(.[$id])' > "$KNOWN_BAD_FILE" 2>/dev/null || true
+        return
+    fi
+
+    if grep -qE "terminate called|Segmentation fault|Aborted \(core dumped\)" "$logfile" 2>/dev/null; then
+        echo "$current" | jq --arg id "$id" --arg screen "$screen" --arg ts "$(date -Iseconds)" \
+            '.[$id] = {screen: $screen, detected_at: $ts}' > "$KNOWN_BAD_FILE" 2>/dev/null || true
+    fi
+}
+
 restart_screen() {
     local screen="$1" id="$2"
     local pidfile="$CONF_DIR/pid_${screen}.pid"
@@ -62,7 +85,11 @@ restart_screen() {
     nohup linux-wallpaperengine --assets-dir "$ASSETS_DIR" --fps 30 --silent \
         --screen-root "$screen" --bg "$WORKSHOP_DIR/$id" --scaling fill --clamp border \
         >>"$logfile" 2>&1 &
-    echo $! > "$pidfile"
+    local new_pid=$!
+    echo "$new_pid" > "$pidfile"
+    disown
+
+    ( watch_for_crash "$screen" "$id" "$new_pid" "$logfile" ) &
     disown
 }
 
