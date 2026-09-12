@@ -58,6 +58,24 @@ Ademas necesitas tener **Wallpaper Engine** (app 431960) instalada en Steam (es 
 ~4€) y al menos un wallpaper suscrito desde el Workshop, o usar la busqueda integrada de
 esta app para descargar uno.
 
+## Estructura del proyecto
+
+```
+bin/
+  wallpaperengine-picker       # lanzador delgado (resuelve el repo y llama a wpelib)
+  wallpaperengine-apply        # aplica wallpapers, un proceso por pantalla
+  wallpaperengine-rotate       # demonio de rotacion automatica
+  wallpaperengine-tray         # icono de bandeja
+  wallpaperengine-common.sh    # deteccion de la biblioteca de Steam (bash)
+wpelib/                        # la app en Python, en modulos:
+  config.py                    # config, deteccion de Steam, estado persistido
+  steam_api.py                 # busqueda/descarga via Steam Web API + steamcmd
+  ui.py                        # tema CSS y widgets reutilizables
+  workshop_window.py           # ventana de busqueda del Workshop
+  playlist_window.py           # ventana de listas de rotacion
+  main_window.py               # ventana principal
+```
+
 ## Instalacion
 
 ```bash
