@@ -232,6 +232,12 @@ problema, se regeneran solas).
   wlroots (Sway, Hyprland...) puedes pasar `--layer background` a `linux-wallpaperengine`
   directamente si lo necesitas (no expuesto aun en la interfaz).
 
+## Roadmap de diseño
+
+[`docs/Mejoras.md`](docs/Mejoras.md) recoge una propuesta detallada de rediseño visual
+(mas densidad en la cuadricula, buscador protagonista, favoritos, vista previa grande,
+menu contextual...) pendiente de implementar.
+
 ## Licencia
 
 MIT. `linux-wallpaperengine` tiene su propia licencia (ver su repositorio); el contenido del
