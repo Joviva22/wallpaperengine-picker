@@ -13,7 +13,7 @@ import time
 import gi
 
 gi.require_version("Gtk", "3.0")
-from gi.repository import Gtk, GdkPixbuf, GLib
+from gi.repository import Gtk, GdkPixbuf, GLib, Gdk
 
 from PIL import Image
 import urllib.request
@@ -385,10 +385,152 @@ def download_workshop_item(wid, log_callback, max_attempts=3):
 # Utilidades de interfaz
 # ---------------------------------------------------------------------------
 
+APP_CSS = """
+@define-color wpe_bg #1c1d24;
+@define-color wpe_surface #262834;
+@define-color wpe_surface_alt #2f3140;
+@define-color wpe_border alpha(#ffffff, 0.09);
+@define-color wpe_accent #7c6cf0;
+@define-color wpe_accent_hover #9384f5;
+@define-color wpe_text #eceef5;
+@define-color wpe_text_dim #9a9cb5;
+
+window {
+    background-color: @wpe_bg;
+    color: @wpe_text;
+    font-size: 10.5pt;
+}
+
+label { color: @wpe_text; }
+label.dim-label { color: @wpe_text_dim; }
+
+.wpe-frame-title {
+    color: @wpe_accent_hover;
+    font-weight: 700;
+    padding: 0 4px;
+}
+
+frame {
+    background-color: @wpe_surface;
+    border: 1px solid @wpe_border;
+    border-radius: 10px;
+    padding: 2px;
+}
+frame > border { border: none; }
+
+button {
+    background-image: none;
+    background-color: @wpe_surface_alt;
+    color: @wpe_text;
+    border: 1px solid @wpe_border;
+    border-radius: 8px;
+    padding: 6px 12px;
+    transition: background-color 150ms ease;
+}
+button:hover {
+    background-color: alpha(@wpe_accent, 0.28);
+    border-color: @wpe_accent;
+}
+button:active { background-color: alpha(@wpe_accent, 0.45); }
+button.suggested-action {
+    background-color: @wpe_accent;
+    color: #ffffff;
+    border: none;
+}
+button.suggested-action:hover { background-color: @wpe_accent_hover; }
+
+entry, spinbutton {
+    background-color: @wpe_surface_alt;
+    color: @wpe_text;
+    border: 1px solid @wpe_border;
+    border-radius: 8px;
+    padding: 5px 8px;
+    caret-color: @wpe_text;
+}
+entry:focus, spinbutton:focus { border-color: @wpe_accent; }
+
+combobox button {
+    background-color: @wpe_surface_alt;
+    border: 1px solid @wpe_border;
+    border-radius: 8px;
+}
+combobox window menu, menu {
+    background-color: @wpe_surface_alt;
+    color: @wpe_text;
+    border-radius: 8px;
+}
+
+checkbutton, radiobutton { color: @wpe_text; }
+checkbutton check, radiobutton radio {
+    background-color: @wpe_surface_alt;
+    border: 1px solid @wpe_border;
+}
+checkbutton check:checked, radiobutton radio:checked {
+    background-color: @wpe_accent;
+    border-color: @wpe_accent;
+}
+
+scrolledwindow {
+    border: 1px solid @wpe_border;
+    border-radius: 10px;
+    background-color: @wpe_surface;
+}
+scrolledwindow undershoot, scrolledwindow overshoot { background: none; }
+
+iconview {
+    background-color: transparent;
+    color: @wpe_text;
+}
+iconview .cell {
+    border-radius: 10px;
+    padding: 4px;
+}
+iconview .cell:selected {
+    background-color: alpha(@wpe_accent, 0.35);
+    color: @wpe_text;
+}
+
+treeview {
+    background-color: @wpe_surface;
+    color: @wpe_text;
+    border-radius: 8px;
+}
+treeview:selected {
+    background-color: alpha(@wpe_accent, 0.35);
+    color: @wpe_text;
+}
+treeview header button {
+    background-color: @wpe_surface_alt;
+    border-radius: 0;
+}
+
+textview, textview text {
+    background-color: @wpe_surface;
+    color: @wpe_text_dim;
+    border-radius: 8px;
+    font-family: monospace;
+    font-size: 9pt;
+}
+
+progressbar trough { background-color: @wpe_surface_alt; border-radius: 8px; }
+progressbar progress { background-color: @wpe_accent; border-radius: 8px; }
+"""
+
+
+def apply_css():
+    provider = Gtk.CssProvider()
+    provider.load_from_data(APP_CSS.encode("utf-8"))
+    screen = Gdk.Screen.get_default()
+    Gtk.StyleContext.add_provider_for_screen(
+        screen, provider, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION
+    )
+
+
 def labeled_frame(title):
     frame = Gtk.Frame()
     label = Gtk.Label()
     label.set_markup(f"<b>{GLib.markup_escape_text(title)}</b>")
+    label.get_style_context().add_class("wpe-frame-title")
     frame.set_label_widget(label)
     frame.set_shadow_type(Gtk.ShadowType.ETCHED_IN)
     return frame
@@ -428,6 +570,7 @@ class WorkshopBrowserWindow(Gtk.Window):
         self.total_results = 0
         self.last_search = None
         self.placeholder_pixbuf = GdkPixbuf.Pixbuf.new(GdkPixbuf.Colorspace.RGB, False, 8, *THUMB_SIZE)
+        self.placeholder_pixbuf.fill(0x2f3140ff)
 
         vbox = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
         self.add(vbox)
@@ -1058,6 +1201,7 @@ class PickerWindow(Gtk.Window):
         button_box.pack_end(playlist_btn, False, False, 0)
 
         self.placeholder_pixbuf = GdkPixbuf.Pixbuf.new(GdkPixbuf.Colorspace.RGB, False, 8, *THUMB_SIZE)
+        self.placeholder_pixbuf.fill(0x2f3140ff)
 
         GLib.idle_add(self.populate)
 
@@ -1228,6 +1372,7 @@ class PickerWindow(Gtk.Window):
 
 
 def main():
+    apply_css()
     win = PickerWindow()
     win.connect("destroy", Gtk.main_quit)
     win.show_all()
