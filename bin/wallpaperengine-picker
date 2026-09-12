@@ -861,7 +861,10 @@ class WorkshopBrowserWindow(Gtk.Window):
                     except Exception:
                         pixbuf = self.placeholder_pixbuf
 
-            display_title = f"[Ya la tienes] {title}" if is_already_downloaded(wid) else title
+            size_text = format_size(item.get("file_size"))
+            display_title = f"{title} ({size_text})"
+            if is_already_downloaded(wid):
+                display_title = f"[Ya la tienes] {display_title}"
             self.store.append([pixbuf, display_title, wid])
 
         total_pages = max(1, -(-total // self.per_page)) if total else 1
