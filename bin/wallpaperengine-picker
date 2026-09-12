@@ -675,6 +675,8 @@ class WorkshopBrowserWindow(Gtk.Window):
         self.current_page = 1
         self.total_results = 0
         self.last_search = None
+        self.page_cache = {}
+        self.prefetching = set()
         self.placeholder_pixbuf = GdkPixbuf.Pixbuf.new(GdkPixbuf.Colorspace.RGB, False, 8, *THUMB_SIZE)
         self.placeholder_pixbuf.fill(0x2f3140ff)
 
@@ -810,12 +812,21 @@ class WorkshopBrowserWindow(Gtk.Window):
             "api_key": api_key, "query": query, "required_tags": required_tags,
             "ratings": ratings, "query_type": query_type, "days": days,
         }
+        # Nueva busqueda: la cache de paginas de la busqueda anterior ya no vale.
+        self.page_cache = {}
+        self.prefetching = set()
         self.run_search(page=1)
 
     def run_search(self, page):
         if not self.last_search:
             return
         self.current_page = page
+
+        if page in self.page_cache:
+            total, results = self.page_cache[page]
+            self._populate_results(total, results, page)
+            return
+
         self.status_label.set_text(f"Buscando (pagina {page})...")
         self.store.clear()
         self.tags_by_id.clear()
@@ -839,8 +850,11 @@ class WorkshopBrowserWindow(Gtk.Window):
         GLib.idle_add(self._populate_results, total, results, page)
 
     def _populate_results(self, total, results, page):
+        was_cached = page in self.page_cache
+        self.page_cache[page] = (total, results)
         self.results = results
         self.total_results = total
+        self.store.clear()
         for item in results:
             wid = item.get("publishedfileid", "")
             title = item.get("title", wid)
@@ -868,10 +882,50 @@ class WorkshopBrowserWindow(Gtk.Window):
             self.store.append([pixbuf, display_title, wid])
 
         total_pages = max(1, -(-total // self.per_page)) if total else 1
+        cached_note = " (precargada)" if was_cached else ""
         self.page_label.set_text(f"Pagina {page} de {total_pages} ({total} resultados)")
         self.prev_btn.set_sensitive(page > 1)
         self.next_btn.set_sensitive(page < total_pages)
-        self.status_label.set_text(f"{len(results)} resultados en esta pagina")
+        self.status_label.set_text(f"{len(results)} resultados en esta pagina{cached_note}")
+
+        # Precarga la pagina siguiente en segundo plano (datos + miniaturas) para que
+        # "Pagina siguiente" sea instantaneo cuando llegues a ella.
+        if page < total_pages:
+            self._prefetch_page(page + 1)
+        return False
+
+    def _prefetch_page(self, page):
+        if page in self.page_cache or page in self.prefetching or not self.last_search:
+            return
+        self.prefetching.add(page)
+        params = dict(self.last_search)
+        threading.Thread(target=self._prefetch_thread, args=(params, page), daemon=True).start()
+
+    def _prefetch_thread(self, params, page):
+        try:
+            total, results = steam_api_search_multi(
+                params["api_key"], params["query"],
+                required_tags=params["required_tags"], ratings=params["ratings"],
+                query_type=params["query_type"], days=params["days"],
+                page=page, per_page=self.per_page,
+            )
+        except SteamApiError:
+            GLib.idle_add(self.prefetching.discard, page)
+            return
+        # Calienta la cache de miniaturas aqui mismo, en el hilo de fondo.
+        for item in results:
+            wid = item.get("publishedfileid", "")
+            preview_url = item.get("preview_url", "")
+            if preview_url:
+                download_workshop_thumb(wid, preview_url)
+        GLib.idle_add(self._store_prefetched, page, total, results)
+
+    def _store_prefetched(self, page, total, results):
+        self.page_cache[page] = (total, results)
+        self.prefetching.discard(page)
+        if page == self.current_page:
+            # Si mientras se precargaba llegaste a esta pagina por otra via, muestrala.
+            self._populate_results(total, results, page)
         return False
 
     def on_prev_page(self, button):
