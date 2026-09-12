@@ -1,0 +1,640 @@
+#!/usr/bin/env python3
+"""Selector grafico con miniaturas para elegir wallpapers de Wallpaper Engine,
+con asignacion independiente por monitor, filtros por etiqueta/clasificacion,
+y busqueda + descarga de nuevos wallpapers desde el Workshop de Steam (API)."""
+import json
+import os
+import re
+import shutil
+import subprocess
+import threading
+
+import gi
+
+gi.require_version("Gtk", "3.0")
+from gi.repository import Gtk, GdkPixbuf, GLib
+
+from PIL import Image
+import urllib.request
+import urllib.parse
+import urllib.error
+
+APPID = "431960"
+CONF_DIR = os.path.expanduser("~/.config/wallpaperengine-picker")
+CONFIG_FILE = os.path.join(CONF_DIR, "config.json")
+CURRENT_FILE = os.path.join(CONF_DIR, "current.json")
+CACHE_DIR = os.path.expanduser("~/.cache/wallpaperengine-picker/thumbs")
+WORKSHOP_THUMB_CACHE = os.path.expanduser("~/.cache/wallpaperengine-picker/workshop_thumbs")
+APPLY_SCRIPT = os.path.expanduser("~/.local/bin/wallpaperengine-apply")
+THUMB_SIZE = (220, 130)
+DEFAULT_ID = "2168640648"
+STEAM_API_QUERYFILES = "https://api.steampowered.com/IPublishedFileService/QueryFiles/v1/"
+
+os.makedirs(CACHE_DIR, exist_ok=True)
+os.makedirs(WORKSHOP_THUMB_CACHE, exist_ok=True)
+os.makedirs(CONF_DIR, exist_ok=True)
+
+
+# ---------------------------------------------------------------------------
+# Configuracion y deteccion de la biblioteca de Steam
+# ---------------------------------------------------------------------------
+
+def parse_libraryfolders(vdf_path):
+    paths = []
+    try:
+        with open(vdf_path, encoding="utf-8", errors="ignore") as f:
+            content = f.read()
+        for match in re.findall(r'"path"\s*"([^"]+)"', content):
+            paths.append(match.replace("\\\\", "/"))
+    except Exception:
+        pass
+    return paths
+
+
+def detect_steam_library():
+    candidates = [os.path.expanduser("~/.local/share/Steam"), os.path.expanduser("~/.steam/steam")]
+    lib_paths = []
+    for base in candidates:
+        vdf = os.path.join(base, "steamapps", "libraryfolders.vdf")
+        if os.path.isfile(vdf):
+            lib_paths.append(base)
+            lib_paths.extend(parse_libraryfolders(vdf))
+
+    seen = []
+    for p in lib_paths:
+        if p not in seen:
+            seen.append(p)
+
+    for p in seen:
+        if os.path.isdir(os.path.join(p, "steamapps", "workshop", "content", APPID)) or \
+           os.path.isdir(os.path.join(p, "steamapps", "common", "wallpaper_engine")):
+            return p
+
+    return seen[0] if seen else os.path.expanduser("~/.local/share/Steam")
+
+
+def load_config():
+    cfg = {}
+    if os.path.isfile(CONFIG_FILE):
+        try:
+            with open(CONFIG_FILE, encoding="utf-8") as f:
+                cfg = json.load(f)
+        except Exception:
+            cfg = {}
+    changed = False
+    if not cfg.get("steam_library") or not os.path.isdir(cfg.get("steam_library", "")):
+        cfg["steam_library"] = detect_steam_library()
+        changed = True
+    if changed:
+        save_config(cfg)
+    return cfg
+
+
+def save_config(cfg):
+    os.makedirs(CONF_DIR, exist_ok=True)
+    with open(CONFIG_FILE, "w", encoding="utf-8") as f:
+        json.dump(cfg, f, indent=2)
+    try:
+        os.chmod(CONFIG_FILE, 0o600)
+    except OSError:
+        pass
+
+
+CONFIG = load_config()
+STEAM_LIB = CONFIG["steam_library"]
+WORKSHOP_DIR = os.path.join(STEAM_LIB, "steamapps", "workshop", "content", APPID)
+ASSETS_DIR = os.path.join(STEAM_LIB, "steamapps", "common", "wallpaper_engine", "assets")
+
+
+def detect_monitors():
+    try:
+        out = subprocess.check_output(["xrandr", "--listmonitors"], text=True, stderr=subprocess.DEVNULL)
+    except Exception:
+        return []
+    lines = out.strip().splitlines()[1:]
+    return [line.split()[-1] for line in lines if line.strip()]
+
+
+def load_current_assignments(monitors):
+    assignments = {}
+    if os.path.isfile(CURRENT_FILE):
+        try:
+            with open(CURRENT_FILE, encoding="utf-8") as f:
+                assignments = json.load(f)
+        except Exception:
+            assignments = {}
+    for mon in monitors:
+        assignments.setdefault(mon, DEFAULT_ID)
+    return assignments
+
+
+def build_thumb(preview_path, dest_path):
+    try:
+        img = Image.open(preview_path)
+        img = img.convert("RGB")
+        img.thumbnail(THUMB_SIZE, Image.LANCZOS)
+        canvas = Image.new("RGB", THUMB_SIZE, (30, 30, 30))
+        x = (THUMB_SIZE[0] - img.width) // 2
+        y = (THUMB_SIZE[1] - img.height) // 2
+        canvas.paste(img, (x, y))
+        canvas.save(dest_path, "PNG")
+        return True
+    except Exception:
+        return False
+
+
+def load_wallpapers():
+    """Devuelve lista de dicts: id, title, thumb_path, tags (list), rating (str)."""
+    items = []
+    if not os.path.isdir(WORKSHOP_DIR):
+        return items
+    for entry in sorted(os.listdir(WORKSHOP_DIR)):
+        folder = os.path.join(WORKSHOP_DIR, entry)
+        project_path = os.path.join(folder, "project.json")
+        if not os.path.isfile(project_path):
+            continue
+        try:
+            with open(project_path, encoding="utf-8", errors="ignore") as f:
+                data = json.load(f)
+            title = data.get("title", entry)
+            preview = data.get("preview", "")
+            tags = data.get("tags", []) or []
+            rating = data.get("contentrating", "Desconocido") or "Desconocido"
+        except Exception:
+            title, preview, tags, rating = entry, "", [], "Desconocido"
+
+        thumb_path = os.path.join(CACHE_DIR, f"{entry}.png")
+        if not os.path.isfile(thumb_path):
+            preview_path = os.path.join(folder, preview) if preview else ""
+            if not (preview_path and os.path.isfile(preview_path) and build_thumb(preview_path, thumb_path)):
+                thumb_path = None
+
+        items.append({"id": entry, "title": title, "thumb": thumb_path, "tags": tags, "rating": rating})
+    items.sort(key=lambda r: r["title"].lower())
+    return items
+
+
+# ---------------------------------------------------------------------------
+# Cliente de la Steam Web API (busqueda en el Workshop) + descarga con steamcmd
+# ---------------------------------------------------------------------------
+
+class SteamApiError(Exception):
+    pass
+
+
+def steam_api_search(api_key, search_text, page=1, per_page=30):
+    query_type = 12 if search_text else 0  # 12 = RankedByTextSearch, 0 = RankedByVote
+    params = {
+        "key": api_key,
+        "appid": APPID,
+        "numperpage": str(per_page),
+        "page": str(page),
+        "query_type": str(query_type),
+        "return_vote_data": "false",
+        "return_tags": "true",
+        "return_short_description": "false",
+        "strip_description_bbcode": "true",
+    }
+    if search_text:
+        params["search_text"] = search_text
+
+    url = STEAM_API_QUERYFILES + "?" + urllib.parse.urlencode(params)
+    try:
+        with urllib.request.urlopen(url, timeout=15) as resp:
+            data = json.load(resp)
+    except urllib.error.HTTPError as e:
+        raise SteamApiError(f"Error HTTP {e.code} de la API de Steam (revisa tu API key)") from e
+    except Exception as e:
+        raise SteamApiError(f"No se pudo contactar la API de Steam: {e}") from e
+
+    return data.get("response", {}).get("publishedfiledetails", [])
+
+
+def download_workshop_thumb(wid, url):
+    dest = os.path.join(WORKSHOP_THUMB_CACHE, f"{wid}.png")
+    if os.path.isfile(dest):
+        return dest
+    try:
+        tmp_path = dest + ".tmp"
+        urllib.request.urlretrieve(url, tmp_path)
+        img = Image.open(tmp_path).convert("RGB")
+        img.thumbnail(THUMB_SIZE, Image.LANCZOS)
+        canvas = Image.new("RGB", THUMB_SIZE, (30, 30, 30))
+        x = (THUMB_SIZE[0] - img.width) // 2
+        y = (THUMB_SIZE[1] - img.height) // 2
+        canvas.paste(img, (x, y))
+        canvas.save(dest, "PNG")
+        os.remove(tmp_path)
+        return dest
+    except Exception:
+        return None
+
+
+def download_workshop_item(wid, log_callback):
+    if not shutil.which("steamcmd"):
+        log_callback("steamcmd no esta instalado. Instalalo (ver README) e intenta de nuevo.\n")
+        return False
+    cmd = [
+        "steamcmd",
+        "+force_install_dir", STEAM_LIB,
+        "+login", "anonymous",
+        "+workshop_download_item", APPID, wid,
+        "+quit",
+    ]
+    log_callback(f"Ejecutando: {' '.join(cmd)}\n")
+    try:
+        proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+        for line in proc.stdout:
+            log_callback(line)
+        proc.wait()
+        return proc.returncode == 0
+    except Exception as e:
+        log_callback(f"Error al ejecutar steamcmd: {e}\n")
+        return False
+
+
+# ---------------------------------------------------------------------------
+# Ventana de busqueda/descarga del Workshop
+# ---------------------------------------------------------------------------
+
+class WorkshopBrowserWindow(Gtk.Window):
+    def __init__(self, on_downloaded):
+        super().__init__(title="Buscar en el Workshop de Wallpaper Engine")
+        self.set_default_size(950, 700)
+        self.set_border_width(8)
+        self.on_downloaded = on_downloaded
+        self.results = []
+        self.placeholder_pixbuf = GdkPixbuf.Pixbuf.new(GdkPixbuf.Colorspace.RGB, False, 8, *THUMB_SIZE)
+
+        vbox = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
+        self.add(vbox)
+
+        search_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+        search_box.pack_start(Gtk.Label(label="Buscar:"), False, False, 0)
+        self.search_entry = Gtk.Entry()
+        self.search_entry.set_placeholder_text("Palabras clave (vacio = mas votados)...")
+        self.search_entry.connect("activate", self.on_search_clicked)
+        search_box.pack_start(self.search_entry, True, True, 0)
+        search_btn = Gtk.Button(label="Buscar")
+        search_btn.connect("clicked", self.on_search_clicked)
+        search_box.pack_start(search_btn, False, False, 0)
+        vbox.pack_start(search_box, False, False, 0)
+
+        self.store = Gtk.ListStore(GdkPixbuf.Pixbuf, str, str)  # pixbuf, title, id
+        self.icon_view = Gtk.IconView(model=self.store)
+        self.icon_view.set_pixbuf_column(0)
+        self.icon_view.set_text_column(1)
+        self.icon_view.set_item_width(THUMB_SIZE[0] + 20)
+        self.icon_view.connect("item-activated", self.on_item_activated)
+
+        scrolled = Gtk.ScrolledWindow()
+        scrolled.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
+        scrolled.add(self.icon_view)
+        vbox.pack_start(scrolled, True, True, 0)
+
+        bottom_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+        vbox.pack_start(bottom_box, False, False, 0)
+        self.status_label = Gtk.Label(label="Escribe algo y pulsa Buscar, o busca directamente para ver los mas votados.")
+        self.status_label.set_halign(Gtk.Align.START)
+        bottom_box.pack_start(self.status_label, True, True, 0)
+        download_btn = Gtk.Button(label="Descargar seleccionado")
+        download_btn.connect("clicked", self.on_download_clicked)
+        bottom_box.pack_end(download_btn, False, False, 0)
+
+        self.log_view = Gtk.TextView()
+        self.log_view.set_editable(False)
+        self.log_buffer = self.log_view.get_buffer()
+        log_scrolled = Gtk.ScrolledWindow()
+        log_scrolled.set_size_request(-1, 120)
+        log_scrolled.add(self.log_view)
+        vbox.pack_start(log_scrolled, False, False, 0)
+
+    def get_api_key(self):
+        key = CONFIG.get("steam_api_key")
+        if key:
+            return key
+        dialog = Gtk.Dialog(title="Steam Web API Key requerida", transient_for=self, modal=True)
+        dialog.add_buttons(Gtk.STOCK_CANCEL, Gtk.ResponseType.CANCEL, Gtk.STOCK_OK, Gtk.ResponseType.OK)
+        box = dialog.get_content_area()
+        box.set_spacing(6)
+        box.set_border_width(10)
+        box.add(Gtk.Label(label="Genera una clave gratuita en:\nhttps://steamcommunity.com/dev/apikey\n(usa 'localhost' como dominio)"))
+        entry = Gtk.Entry()
+        entry.set_visibility(False)
+        box.add(entry)
+        dialog.show_all()
+        response = dialog.run()
+        key = entry.get_text().strip()
+        dialog.destroy()
+        if response == Gtk.ResponseType.OK and key:
+            CONFIG["steam_api_key"] = key
+            save_config(CONFIG)
+            return key
+        return None
+
+    def append_log(self, text):
+        end_iter = self.log_buffer.get_end_iter()
+        self.log_buffer.insert(end_iter, text)
+        self.log_view.scroll_to_iter(self.log_buffer.get_end_iter(), 0, False, 0, 0)
+
+    def on_search_clicked(self, *args):
+        api_key = self.get_api_key()
+        if not api_key:
+            self.status_label.set_text("Necesitas una API key para buscar en el Workshop.")
+            return
+        query = self.search_entry.get_text().strip()
+        self.status_label.set_text("Buscando...")
+        self.store.clear()
+        threading.Thread(target=self._search_thread, args=(api_key, query), daemon=True).start()
+
+    def _search_thread(self, api_key, query):
+        try:
+            results = steam_api_search(api_key, query)
+        except SteamApiError as e:
+            GLib.idle_add(self.status_label.set_text, str(e))
+            return
+        GLib.idle_add(self._populate_results, results)
+
+    def _populate_results(self, results):
+        self.results = results
+        for item in results:
+            wid = item.get("publishedfileid", "")
+            title = item.get("title", wid)
+            preview_url = item.get("preview_url", "")
+            pixbuf = self.placeholder_pixbuf
+            if preview_url:
+                thumb_path = download_workshop_thumb(wid, preview_url)
+                if thumb_path:
+                    try:
+                        pixbuf = GdkPixbuf.Pixbuf.new_from_file(thumb_path)
+                    except Exception:
+                        pixbuf = self.placeholder_pixbuf
+            self.store.append([pixbuf, title, wid])
+        self.status_label.set_text(f"{len(results)} resultados")
+        return False
+
+    def get_selected_id(self):
+        selected = self.icon_view.get_selected_items()
+        if not selected:
+            return None
+        iter_ = self.store.get_iter(selected[0])
+        return self.store[iter_][2]
+
+    def on_item_activated(self, icon_view, path):
+        iter_ = self.store.get_iter(path)
+        wid = self.store[iter_][2]
+        self.start_download(wid)
+
+    def on_download_clicked(self, button):
+        wid = self.get_selected_id()
+        if not wid:
+            self.status_label.set_text("Selecciona un wallpaper de los resultados primero")
+            return
+        self.start_download(wid)
+
+    def start_download(self, wid):
+        self.status_label.set_text(f"Descargando {wid}...")
+        self.append_log(f"\n--- Descargando {wid} ---\n")
+        threading.Thread(target=self._download_thread, args=(wid,), daemon=True).start()
+
+    def _download_thread(self, wid):
+        ok = download_workshop_item(wid, lambda line: GLib.idle_add(self.append_log, line))
+        GLib.idle_add(self._download_done, wid, ok)
+
+    def _download_done(self, wid, ok):
+        if ok:
+            self.status_label.set_text(f"Descarga completada: {wid}")
+            if self.on_downloaded:
+                self.on_downloaded()
+        else:
+            self.status_label.set_text(f"Fallo la descarga de {wid} (revisa el log)")
+        return False
+
+
+# ---------------------------------------------------------------------------
+# Ventana principal
+# ---------------------------------------------------------------------------
+
+class PickerWindow(Gtk.Window):
+    def __init__(self):
+        super().__init__(title="Elegir Fondo de Pantalla")
+        self.set_default_size(1000, 750)
+        self.set_border_width(8)
+
+        self.monitors = detect_monitors() or ["DP-2"]
+        self.assignments = load_current_assignments(self.monitors)
+        self.target_monitor = self.monitors[0]
+        self.titles_by_id = {}
+        self.tags_by_id = {}
+        self.rating_by_id = {}
+        self.workshop_window = None
+
+        vbox = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
+        self.add(vbox)
+
+        # --- Fila de busqueda y filtros ---
+        filter_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+        filter_box.pack_start(Gtk.Label(label="Buscar:"), False, False, 0)
+        self.search_entry = Gtk.SearchEntry()
+        self.search_entry.set_placeholder_text("Titulo...")
+        self.search_entry.connect("search-changed", self.refilter)
+        filter_box.pack_start(self.search_entry, True, True, 0)
+
+        filter_box.pack_start(Gtk.Label(label="Etiqueta:"), False, False, 0)
+        self.tag_combo = Gtk.ComboBoxText()
+        self.tag_combo.append_text("Todas")
+        self.tag_combo.set_active(0)
+        self.tag_combo.connect("changed", self.refilter)
+        filter_box.pack_start(self.tag_combo, False, False, 0)
+
+        filter_box.pack_start(Gtk.Label(label="Clasificacion:"), False, False, 0)
+        self.rating_combo = Gtk.ComboBoxText()
+        for r in ["Todas", "Everyone", "Questionable", "Mature", "Desconocido"]:
+            self.rating_combo.append_text(r)
+        self.rating_combo.set_active(0)
+        self.rating_combo.connect("changed", self.refilter)
+        filter_box.pack_start(self.rating_combo, False, False, 0)
+
+        vbox.pack_start(filter_box, False, False, 0)
+
+        # --- Fila de asignacion por monitor ---
+        monitor_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
+        monitor_box.pack_start(Gtk.Label(label="Configurando pantalla:"), False, False, 0)
+        self.monitor_labels = {}
+        first_radio = None
+        for mon in self.monitors:
+            radio = Gtk.RadioButton.new_with_label_from_widget(first_radio, mon) if first_radio else Gtk.RadioButton.new_with_label(None, mon)
+            if first_radio is None:
+                first_radio = radio
+            radio.connect("toggled", self.on_target_monitor_toggled, mon)
+            monitor_box.pack_start(radio, False, False, 0)
+            assigned_label = Gtk.Label(label=f"({self.assignments.get(mon, '?')})")
+            assigned_label.set_halign(Gtk.Align.START)
+            monitor_box.pack_start(assigned_label, False, False, 0)
+            self.monitor_labels[mon] = assigned_label
+        vbox.pack_start(monitor_box, False, False, 0)
+
+        # --- Vista de iconos ---
+        self.store = Gtk.ListStore(GdkPixbuf.Pixbuf, str, str)  # pixbuf, title, id
+        self.filter_model = self.store.filter_new()
+        self.filter_model.set_visible_func(self.filter_func)
+
+        self.icon_view = Gtk.IconView(model=self.filter_model)
+        self.icon_view.set_pixbuf_column(0)
+        self.icon_view.set_text_column(1)
+        self.icon_view.set_item_width(THUMB_SIZE[0] + 20)
+        self.icon_view.connect("item-activated", self.on_item_activated)
+
+        scrolled = Gtk.ScrolledWindow()
+        scrolled.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
+        scrolled.add(self.icon_view)
+        vbox.pack_start(scrolled, True, True, 0)
+
+        # --- Barra inferior ---
+        button_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+        vbox.pack_start(button_box, False, False, 0)
+
+        self.status_label = Gtk.Label(label="Cargando...")
+        self.status_label.set_halign(Gtk.Align.START)
+        button_box.pack_start(self.status_label, True, True, 0)
+
+        assign_btn = Gtk.Button(label="Asignar a esta pantalla")
+        assign_btn.connect("clicked", self.on_assign_clicked)
+        button_box.pack_end(assign_btn, False, False, 0)
+
+        refresh_btn = Gtk.Button(label="Refrescar lista")
+        refresh_btn.connect("clicked", self.on_refresh_clicked)
+        button_box.pack_end(refresh_btn, False, False, 0)
+
+        workshop_btn = Gtk.Button(label="Buscar en Workshop (API)")
+        workshop_btn.connect("clicked", self.on_open_workshop_browser)
+        button_box.pack_end(workshop_btn, False, False, 0)
+
+        self.placeholder_pixbuf = GdkPixbuf.Pixbuf.new(GdkPixbuf.Colorspace.RGB, False, 8, *THUMB_SIZE)
+
+        GLib.idle_add(self.populate)
+
+    def populate(self):
+        items = load_wallpapers()
+        all_tags = set()
+        for item in items:
+            wid = item["id"]
+            self.titles_by_id[wid] = item["title"]
+            self.tags_by_id[wid] = item["tags"]
+            self.rating_by_id[wid] = item["rating"]
+            all_tags.update(item["tags"])
+
+            if item["thumb"] and os.path.isfile(item["thumb"]):
+                try:
+                    pixbuf = GdkPixbuf.Pixbuf.new_from_file(item["thumb"])
+                except Exception:
+                    pixbuf = self.placeholder_pixbuf
+            else:
+                pixbuf = self.placeholder_pixbuf
+            self.store.append([pixbuf, item["title"], wid])
+
+        for tag in sorted(all_tags, key=str.lower):
+            self.tag_combo.append_text(tag)
+
+        for mon in self.monitors:
+            self.update_monitor_label(mon)
+
+        self.status_label.set_text(f"{len(items)} wallpapers")
+        return False
+
+    def update_monitor_label(self, mon):
+        wid = self.assignments.get(mon)
+        title = self.titles_by_id.get(wid, wid or "?")
+        self.monitor_labels[mon].set_text(f"({title})")
+
+    def filter_func(self, model, iter_, data):
+        wid = model[iter_][2]
+        query = self.search_entry.get_text().strip().lower()
+        if query and query not in (model[iter_][1] or "").lower():
+            return False
+
+        tag_choice = self.tag_combo.get_active_text()
+        if tag_choice and tag_choice != "Todas":
+            if tag_choice not in self.tags_by_id.get(wid, []):
+                return False
+
+        rating_choice = self.rating_combo.get_active_text()
+        if rating_choice and rating_choice != "Todas":
+            if self.rating_by_id.get(wid) != rating_choice:
+                return False
+
+        return True
+
+    def refilter(self, *args):
+        self.filter_model.refilter()
+
+    def on_target_monitor_toggled(self, radio, mon):
+        if radio.get_active():
+            self.target_monitor = mon
+
+    def get_selected_id(self):
+        selected = self.icon_view.get_selected_items()
+        if not selected:
+            return None
+        iter_ = self.filter_model.get_iter(selected[0])
+        return self.filter_model[iter_][2]
+
+    def assign_and_apply(self, wid):
+        self.assignments[self.target_monitor] = wid
+        self.update_monitor_label(self.target_monitor)
+        pairs = [f"{mon}={vid}" for mon, vid in self.assignments.items()]
+        subprocess.Popen([APPLY_SCRIPT, *pairs])
+        self.status_label.set_text(f"Aplicando en {self.target_monitor}: {self.titles_by_id.get(wid, wid)}")
+
+    def on_item_activated(self, icon_view, path):
+        iter_ = self.filter_model.get_iter(path)
+        wid = self.filter_model[iter_][2]
+        self.assign_and_apply(wid)
+
+    def on_assign_clicked(self, button):
+        wid = self.get_selected_id()
+        if wid:
+            self.assign_and_apply(wid)
+        else:
+            self.status_label.set_text("Selecciona un wallpaper primero")
+
+    def on_open_workshop_browser(self, button):
+        if self.workshop_window is None or not self.workshop_window.get_visible():
+            self.workshop_window = WorkshopBrowserWindow(on_downloaded=self.on_refresh_clicked)
+            self.workshop_window.show_all()
+        else:
+            self.workshop_window.present()
+
+    def _restore_tag_selection(self, previous_text):
+        model = self.tag_combo.get_model()
+        for i, row in enumerate(model):
+            if row[0] == previous_text:
+                self.tag_combo.set_active(i)
+                return
+        self.tag_combo.set_active(0)
+
+    def on_refresh_clicked(self, *args):
+        previous_tag = self.tag_combo.get_active_text()
+        self.status_label.set_text("Actualizando lista de wallpapers...")
+
+        self.store.clear()
+        self.titles_by_id.clear()
+        self.tags_by_id.clear()
+        self.rating_by_id.clear()
+        self.tag_combo.remove_all()
+        self.tag_combo.append_text("Todas")
+
+        self.populate()
+        self._restore_tag_selection(previous_tag)
+        self.refilter()
+
+
+def main():
+    win = PickerWindow()
+    win.connect("destroy", Gtk.main_quit)
+    win.show_all()
+    Gtk.main()
+
+
+if __name__ == "__main__":
+    main()

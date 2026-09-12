@@ -1,0 +1,54 @@
+#!/usr/bin/env bash
+# Aplica wallpapers de Wallpaper Engine, uno por pantalla.
+# Uso: wallpaperengine-apply PANTALLA=ID [PANTALLA=ID ...]
+set -euo pipefail
+
+SCRIPT_DIR=$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)
+source "$SCRIPT_DIR/wallpaperengine-common.sh"
+
+STEAM_LIB=$(wpe_get_steam_library)
+WORKSHOP_DIR="$STEAM_LIB/steamapps/workshop/content/$WPE_APPID"
+ASSETS_DIR="$STEAM_LIB/steamapps/common/wallpaper_engine/assets"
+CONF_DIR="$WPE_CONF_DIR"
+CURRENT_FILE="$CONF_DIR/current.json"
+LOG_FILE="$CONF_DIR/wallpaperengine.log"
+
+if [[ $# -eq 0 ]]; then
+    echo "Uso: wallpaperengine-apply PANTALLA=ID [PANTALLA=ID ...]" >&2
+    exit 1
+fi
+
+mkdir -p "$CONF_DIR"
+
+declare -A ASSIGN
+for pair in "$@"; do
+    screen="${pair%%=*}"
+    id="${pair#*=}"
+    if [[ -z "$screen" || -z "$id" || "$screen" == "$pair" ]]; then
+        echo "Formato invalido: '$pair' (usa PANTALLA=ID)" >&2
+        exit 1
+    fi
+    if [[ ! -d "$WORKSHOP_DIR/$id" ]]; then
+        echo "No existe el wallpaper con id $id en $WORKSHOP_DIR" >&2
+        exit 1
+    fi
+    ASSIGN["$screen"]="$id"
+done
+
+pkill -f linux-wallpaperengine 2>/dev/null || true
+sleep 0.5
+
+args=(--assets-dir "$ASSETS_DIR" --fps 30 --silent)
+for screen in "${!ASSIGN[@]}"; do
+    args+=(--screen-root "$screen" --bg "$WORKSHOP_DIR/${ASSIGN[$screen]}" --scaling fill --clamp border)
+done
+
+nohup linux-wallpaperengine "${args[@]}" >>"$LOG_FILE" 2>&1 &
+disown
+
+echo '{}' > "$CURRENT_FILE"
+for screen in "${!ASSIGN[@]}"; do
+    tmp=$(jq --arg k "$screen" --arg v "${ASSIGN[$screen]}" '. + {($k): $v}' "$CURRENT_FILE")
+    echo "$tmp" > "$CURRENT_FILE"
+    echo "  $screen -> ${ASSIGN[$screen]}"
+done
