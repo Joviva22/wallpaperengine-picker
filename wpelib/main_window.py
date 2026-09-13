@@ -1,8 +1,7 @@
 """Ventana principal: sidebar de navegacion (biblioteca/favoritos/recientes/
 animados/ocultos/workshop + monitores), cuadricula de tarjetas de wallpapers
 locales con filtros combinables, y panel de detalle a la derecha con la
-informacion del wallpaper seleccionado. Basada en el mockup de
-docs/screenshot-interfaz-actual.png."""
+informacion del wallpaper seleccionado."""
 import datetime
 import os
 import subprocess

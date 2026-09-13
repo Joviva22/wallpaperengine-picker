@@ -1,8 +1,7 @@
 """Ventana de busqueda y descarga de wallpapers del Workshop de Steam via API.
 Sidebar de filtros (etiquetas/clasificacion/popularidad) + cuadricula de
 tarjetas (reutiliza WallpaperCard del panel principal) + panel de detalle a
-la derecha, siguiendo el mismo lenguaje visual que la ventana principal
-(ver docs/WorkShop.md)."""
+la derecha, siguiendo el mismo lenguaje visual que la ventana principal."""
 import threading
 
 import gi
