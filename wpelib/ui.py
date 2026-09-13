@@ -2,11 +2,14 @@
 titulo, botones con icono, el desplegable de checkboxes multi-seleccion,
 chips/pestanas, y la tarjeta de wallpaper (miniatura + favorito + hover)."""
 import subprocess
+import urllib.parse
 
 import gi
 
 gi.require_version("Gtk", "3.0")
 from gi.repository import Gtk, GLib, Gdk, Pango
+
+from .config import APPID
 
 CARD_SIZE = (320, 320)  # 1:1; debe coincidir con THUMB_SIZE en wpelib/config.py
 
@@ -306,6 +309,20 @@ def open_in_steam(wid):
         subprocess.Popen(["xdg-open", f"steam://url/CommunityFilePage/{wid}"])
     except Exception:
         subprocess.Popen(["xdg-open", f"https://steamcommunity.com/sharedfiles/filedetails/?id={wid}"])
+
+
+def open_workshop_browse(search_text=""):
+    """Abre la pagina de busqueda del Workshop de Wallpaper Engine directamente en
+    Steam (o en el navegador si Steam no esta disponible), sin pasar por la Steam
+    Web API ni por steamcmd: es la alternativa para quien no quiera configurar una
+    API key y prefiera suscribirse el mismo desde el propio Steam."""
+    url = f"https://steamcommunity.com/app/{APPID}/workshop/"
+    if search_text:
+        url += "?browsesort=textsearch&section=readytouseitems&searchtext=" + urllib.parse.quote(search_text)
+    try:
+        subprocess.Popen(["xdg-open", "steam://openurl/" + url])
+    except Exception:
+        subprocess.Popen(["xdg-open", url])
 
 
 def icon_button(label, icon_name):

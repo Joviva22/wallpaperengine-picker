@@ -16,7 +16,7 @@ from .steam_api import (
     verify_workshop_download, format_size, KNOWN_TAGS, RATING_TAGS, POPULARITY_OPTIONS,
     is_already_downloaded,
 )
-from .ui import icon_button, open_in_steam, CheckListButton, WallpaperCard
+from .ui import icon_button, open_in_steam, open_workshop_browse, CheckListButton, WallpaperCard
 
 
 class WorkshopBrowserWindow(Gtk.Window):
@@ -240,27 +240,50 @@ class WorkshopBrowserWindow(Gtk.Window):
 
     # -- API key ----------------------------------------------------------------
 
-    def get_api_key(self):
+    OPEN_STEAM_RESPONSE = 100
+
+    def get_api_key(self, search_text=""):
         key = CONFIG.get("steam_api_key")
         if key:
             return key
         dialog = Gtk.Dialog(title="Steam Web API Key requerida", transient_for=self, modal=True)
-        dialog.add_buttons(Gtk.STOCK_CANCEL, Gtk.ResponseType.CANCEL, Gtk.STOCK_OK, Gtk.ResponseType.OK)
+        dialog.add_buttons(
+            "Abrir Workshop en Steam", self.OPEN_STEAM_RESPONSE,
+            Gtk.STOCK_CANCEL, Gtk.ResponseType.CANCEL,
+            Gtk.STOCK_OK, Gtk.ResponseType.OK,
+        )
         box = dialog.get_content_area()
         box.set_spacing(6)
         box.set_border_width(10)
-        box.add(Gtk.Label(label="Genera una clave gratuita en:\nhttps://steamcommunity.com/dev/apikey\n(usa 'localhost' como dominio)"))
+        box.add(Gtk.Label(label=(
+            "Genera una clave gratuita en:\nhttps://steamcommunity.com/dev/apikey\n"
+            "(usa 'localhost' como dominio)\n\n"
+            "O, si no quieres usar la API, abre el Workshop directamente en Steam\n"
+            "para buscar y suscribirte alli."
+        )))
         entry = Gtk.Entry()
         entry.set_visibility(False)
+        entry.set_placeholder_text("Steam Web API Key")
         box.add(entry)
         dialog.show_all()
         response = dialog.run()
         key = entry.get_text().strip()
         dialog.destroy()
+
+        if response == self.OPEN_STEAM_RESPONSE:
+            open_workshop_browse(search_text)
+            self.status_label.set_text(
+                "Workshop abierto en Steam. Suscribete alli y luego pulsa "
+                "'Actualizar' en la ventana principal."
+            )
+            return None
         if response == Gtk.ResponseType.OK and key:
             CONFIG["steam_api_key"] = key
             save_config(CONFIG)
             return key
+        self.status_label.set_text(
+            "Necesitas una API key para buscar en el Workshop (o usa 'Abrir Workshop en Steam')."
+        )
         return None
 
     def append_log(self, text):
@@ -271,11 +294,10 @@ class WorkshopBrowserWindow(Gtk.Window):
     # -- Busqueda y paginacion ---------------------------------------------------
 
     def on_search_clicked(self, *args):
-        api_key = self.get_api_key()
-        if not api_key:
-            self.status_label.set_text("Necesitas una API key para buscar en el Workshop.")
-            return
         query = self.search_entry.get_text().strip()
+        api_key = self.get_api_key(search_text=query)
+        if not api_key:
+            return
         required_tags = self.tag_filter.get_selected()
         ratings = self.get_selected_ratings()
         popularity_choice = self.get_selected_popularity()
