@@ -22,8 +22,11 @@ Selector grafico de fondos de pantalla animados para Linux, basado en
 - Autostart en KDE Plasma: recuerda la ultima configuracion por pantalla y la reaplica al
   iniciar sesion.
 
-Probado en CachyOS/Arch Linux con KDE Plasma (Wayland) y una GPU NVIDIA, pero deberia
-funcionar en cualquier distro basada en Arch con los mismos paquetes.
+Probado en CachyOS/Arch Linux con KDE Plasma (Wayland) y una GPU NVIDIA. `install.sh` tambien
+detecta e instala dependencias en Debian/Ubuntu (`apt`), Fedora (`dnf`) y openSUSE (`zypper`),
+con una salvedad: el motor `linux-wallpaperengine` solo tiene paquete listo para instalar en
+Arch (AUR); en el resto hay que compilarlo desde sus fuentes (ver enlace mas abajo) antes de
+correr `install.sh`.
 
 ## Como funciona
 
@@ -41,26 +44,25 @@ grafica (GTK3) alrededor de ese motor para:
 
 ## Requisitos
 
-Paquetes necesarios (nombres para Arch/CachyOS, vía `pacman`/AUR):
+`install.sh` detecta tu gestor de paquetes (`pacman`, `apt`, `dnf` o `zypper`) e instala solo
+lo que falte. Equivalencias por distro:
 
-| Paquete | Repo | Para que se usa |
-|---|---|---|
-| `linux-wallpaperengine-git` | AUR | Motor que renderiza los wallpapers |
-| `steam` | multilib/AUR | Cliente de Steam (para suscribirte a wallpapers) |
-| `steamcmd` | AUR | Descargar wallpapers del Workshop sin abrir Steam |
-| `python-gobject` | oficial | Interfaz grafica (GTK3 desde Python) |
-| `gtk3` | oficial | Interfaz grafica |
-| `python-pillow` | oficial | Generar las miniaturas |
-| `jq` | oficial | Manejo de JSON en los scripts de shell |
-| `xorg-xrandr` | oficial | Detectar monitores conectados |
-| `libayatana-appindicator` | oficial | Icono de bandeja (opcional; sin ella cae a `Gtk.StatusIcon`) |
+| Para que se usa | Arch (`pacman`/AUR) | Debian/Ubuntu (`apt`) | Fedora (`dnf`) | openSUSE (`zypper`) |
+|---|---|---|---|---|
+| Motor que renderiza los wallpapers | `linux-wallpaperengine-git` (AUR) | *sin paquete, compilar* | *sin paquete, compilar* | *sin paquete, compilar* |
+| Cliente de Steam | `steam` | `steam` | `steam` | `steam` |
+| Descargar del Workshop sin abrir Steam | `steamcmd` (AUR) | `steamcmd` | *sin paquete* | *sin paquete* |
+| Interfaz grafica (GTK3 desde Python) | `python-gobject` `gtk3` | `python3-gi` `gir1.2-gtk-3.0` | `python3-gobject` `gtk3` | `python3-gobject` `typelib-1_0-Gtk-3_0` `gtk3` |
+| Generar las miniaturas | `python-pillow` | `python3-pil` | `python3-pillow` | `python3-Pillow` |
+| Manejo de JSON en los scripts de shell | `jq` | `jq` | `jq` | `jq` |
+| Detectar monitores conectados | `xorg-xrandr` | `x11-xserver-utils` | `xorg-x11-server-utils` | `xrandr` |
+| Icono de bandeja (opcional) | `libayatana-appindicator` | `gir1.2-ayatanaappindicator3-0.1` | `libappindicator-gtk3` | `typelib-1_0-AyatanaAppIndicator3-0_1` |
 
-Instalacion con `paru` (o `yay`):
-
-```bash
-paru -S linux-wallpaperengine-git steamcmd
-sudo pacman -S python-gobject gtk3 python-pillow jq xorg-xrandr
-```
+Fuera de Arch, `linux-wallpaperengine` no tiene paquete: compilalo desde
+[sus fuentes](https://github.com/Almamu/linux-wallpaperengine) antes de correr `install.sh`
+(y en Fedora/openSUSE lo mismo con `steamcmd`, ver
+[SteamCMD](https://developer.valvesoftware.com/wiki/SteamCMD); sin el sigue funcionando la
+opcion **"Abrir Workshop en Steam"** para suscribirte manualmente).
 
 Ademas necesitas tener **Wallpaper Engine** (app 431960) instalada en Steam (es de pago,
 ~4€) y al menos un wallpaper suscrito desde el Workshop, o usar la busqueda integrada de
@@ -94,7 +96,11 @@ cd ~/wallpaperengine-picker-api
 
 `install.sh`:
 
-- Comprueba que las dependencias esten instaladas.
+- Detecta tu gestor de paquetes (`pacman`, `apt`, `dnf` o `zypper`) e instala las
+  dependencias que falten con el (pidiendo `sudo`); en Arch usa ademas `paru`/`yay` para lo
+  que viene de AUR (`linux-wallpaperengine-git`, `steamcmd`).
+- Detecta tu biblioteca de Steam (funciona aunque Wallpaper Engine todavia no este instalada
+  ni tengas ningun wallpaper suscrito, siempre que Steam mismo ya se haya abierto una vez).
 - Crea symlinks de `bin/wallpaperengine-apply` y `bin/wallpaperengine-picker` en
   `~/.local/bin` (asegurate de que este directorio este en tu `PATH`).
 - Crea un lanzador en el menu de aplicaciones: **"Elegir Fondo (Wallpaper Engine)"**.
@@ -310,14 +316,6 @@ problema, se regeneran solas).
   lectura, y no se muestra la resolucion del wallpaper (Wallpaper Engine no la expone de
   forma fiable en `project.json`). La ventana no tiene una barra de titulo/logo propios;
   usa la del gestor de ventanas.
-
-## Roadmap de diseño
-
-La interfaz sigue el rediseño propuesto en [`docs/Mejoras.md`](docs/Mejoras.md) (ventana
-principal: sidebar, cuadricula de tarjetas, panel de detalle) y en
-[`docs/WorkShop.md`](docs/WorkShop.md) (misma distribucion aplicada a la busqueda del
-Workshop). Las desviaciones conocidas respecto a esas propuestas estan listadas en "Notas y
-limitaciones" arriba.
 
 ## Licencia
 
