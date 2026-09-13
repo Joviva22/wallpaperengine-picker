@@ -3,9 +3,6 @@
 Selector grafico de fondos de pantalla animados para Linux, basado en
 [linux-wallpaperengine](https://github.com/Almamu/linux-wallpaperengine), con:
 
-> Existe una version hermana sin dependencias externas (sin API ni `steamcmd`), que abre el
-> Workshop en el propio Steam para suscribirte: [wallpaperengine-picker-local](https://github.com/Joviva22/wallpaperengine-picker-local).
-
 - Interfaz con **sidebar + cuadricula + panel de detalle** (Biblioteca / Favoritos / Recientes
   / Animados / Ocultos / Workshop), miniaturas reales en formato cuadrado (1:1), y una tarjeta por wallpaper con
   favorito, insignias y acciones al pasar el raton.
@@ -221,7 +218,10 @@ desactiva automaticamente su rotacion, para que no se pisen entre si.
 ### Configurar la Steam Web API Key
 
 La busqueda en el Workshop usa la API publica de Steam (`IPublishedFileService/QueryFiles`),
-que requiere una API key gratuita asociada a tu cuenta:
+que requiere una API key gratuita asociada a tu cuenta. Si prefieres no configurarla, el
+mismo dialogo que la pide tiene un boton **"Abrir Workshop en Steam"** que te lleva
+directamente a la pagina del Workshop en Steam para buscar y suscribirte alli, sin usar la
+API ni `steamcmd`.
 
 1. Ve a <https://steamcommunity.com/dev/apikey> y genera una key (como dominio puedes poner
    `localhost`).
