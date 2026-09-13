@@ -1,4 +1,4 @@
-# wallpaperengine-picker-api
+# wallpaperengine-picker
 
 Selector grafico de fondos de pantalla animados para Linux, basado en
 [linux-wallpaperengine](https://github.com/Almamu/linux-wallpaperengine), con:
@@ -89,8 +89,8 @@ wpelib/                        # la app en Python, en modulos:
 ## Instalacion
 
 ```bash
-git clone <url-de-este-repo> ~/wallpaperengine-picker-api
-cd ~/wallpaperengine-picker-api
+git clone <url-de-este-repo> ~/wallpaperengine-picker
+cd ~/wallpaperengine-picker
 ./install.sh
 ```
 
