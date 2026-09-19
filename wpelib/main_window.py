@@ -17,13 +17,19 @@ from .config import (
     save_hidden_ids, load_favorite_ids, save_favorite_ids, load_recent_ids, record_recent,
     load_known_bad, load_playlists, save_playlists, load_ui_state, save_ui_state,
     unsubscribe_workshop_item, build_thumb, SORT_OPTIONS, SORT_REVERSE, APPLY_SCRIPT,
-    CACHE_DIR, STEAM_LIB,
+    CACHE_DIR, STEAM_LIB, load_scaling, save_scaling, SCALING_MODES, DEFAULT_SCALING,
 )
 from .ui import icon_button, open_in_steam, apply_css, WallpaperCard, CARD_SIZE
 from .workshop_window import WorkshopBrowserWindow
 from .playlist_window import PlaylistWindow
 
 TABS = ["Todos", "Favoritos", "Recientes", "Animados", "Ocultos"]
+SCALING_LABELS = {
+    "fill": "Rellenar (recorta)",
+    "fit": "Ajustar (sin recortar)",
+    "stretch": "Estirar",
+    "default": "Por defecto de la escena",
+}
 TAB_LABELS = {
     "Todos": "Biblioteca", "Favoritos": "Favoritos", "Recientes": "Recientes",
     "Animados": "Animados", "Ocultos": "Ocultos",
@@ -141,6 +147,7 @@ class PickerWindow(Gtk.Window):
 
         self.monitors = detect_monitors() or ["DP-2"]
         self.assignments = load_current_assignments(self.monitors)
+        self.scaling = load_scaling()
 
         ui_state = load_ui_state()
         self.target_monitor = ui_state.get("target_monitor") if ui_state.get("target_monitor") in self.monitors else self.monitors[0]
@@ -304,6 +311,16 @@ class PickerWindow(Gtk.Window):
             chips_box.pack_start(chip, False, False, 0)
             self.monitor_chips[mon] = chip
             self.monitor_chip_subtitles[mon] = subtitle_label
+
+        chips_box.pack_start(Gtk.Label(label="Escalado:"), False, False, 0)
+        self.scaling_combo = Gtk.ComboBoxText()
+        for mode in SCALING_MODES:
+            self.scaling_combo.append_text(SCALING_LABELS.get(mode, mode))
+        current_mode = self.scaling.get(self.target_monitor, DEFAULT_SCALING)
+        self.scaling_combo.set_active(SCALING_MODES.index(current_mode) if current_mode in SCALING_MODES else 0)
+        self.scaling_combo.connect("changed", self.on_scaling_changed)
+        chips_box.pack_start(self.scaling_combo, False, False, 0)
+
         box.pack_start(chips_box, False, False, 0)
         return box
 
@@ -642,7 +659,30 @@ class PickerWindow(Gtk.Window):
         self._refresh_assigned_badges()
         if self._detail_wid:
             self._update_detail_panel(self._detail_wid)
+        self._sync_scaling_combo()
         self.save_current_ui_state()
+
+    def _sync_scaling_combo(self):
+        mode = self.scaling.get(self.target_monitor, DEFAULT_SCALING)
+        idx = SCALING_MODES.index(mode) if mode in SCALING_MODES else 0
+        self.scaling_combo.handler_block_by_func(self.on_scaling_changed)
+        self.scaling_combo.set_active(idx)
+        self.scaling_combo.handler_unblock_by_func(self.on_scaling_changed)
+
+    def on_scaling_changed(self, combo):
+        idx = combo.get_active()
+        if idx < 0:
+            return
+        mode = SCALING_MODES[idx]
+        self.scaling[self.target_monitor] = mode
+        save_scaling(self.scaling)
+        self._reapply_current(self.target_monitor)
+        self.status_label.set_text(f"Escalado de {self.target_monitor}: {SCALING_LABELS.get(mode, mode)}")
+
+    def _reapply_current(self, monitor):
+        wid = self.assignments.get(monitor)
+        if wid:
+            subprocess.Popen([APPLY_SCRIPT, f"{monitor}={wid}"])
 
     def assign_and_apply(self, wid, monitor=None):
         monitor = monitor or self.target_monitor

@@ -45,6 +45,19 @@ for pair in "$@"; do
 done
 
 KNOWN_BAD_FILE="$CONF_DIR/known_bad.json"
+SCALING_FILE="$CONF_DIR/scaling.json"
+
+# Modo de escalado guardado para una pantalla ("fill" recorta para rellenar,
+# "fit" ajusta sin recortar dejando bordes si hace falta, "stretch" estira,
+# "default" deja que decida la propia escena). "fill" si no hay nada guardado.
+wpe_get_scaling() {
+    local screen="$1"
+    if [[ -s "$SCALING_FILE" ]]; then
+        jq -r --arg s "$screen" '.[$s] // "fill"' "$SCALING_FILE" 2>/dev/null || echo "fill"
+    else
+        echo "fill"
+    fi
+}
 
 # Espera un poco tras lanzar un wallpaper y comprueba si el proceso murio con una
 # excepcion/crash tipico del motor; si es asi, lo apunta en known_bad.json para que
@@ -100,8 +113,11 @@ restart_screen() {
     local log_start_lines=0
     [[ -f "$logfile" ]] && log_start_lines=$(wc -l < "$logfile")
 
+    local scaling
+    scaling=$(wpe_get_scaling "$screen")
+
     nohup linux-wallpaperengine --assets-dir "$ASSETS_DIR" --fps 30 --silent \
-        --screen-root "$screen" --bg "$WORKSHOP_DIR/$id" --scaling fill --clamp border \
+        --screen-root "$screen" --bg "$WORKSHOP_DIR/$id" --scaling "$scaling" --clamp border \
         >>"$logfile" 2>&1 &
     local new_pid=$!
     echo "$new_pid" > "$pidfile"

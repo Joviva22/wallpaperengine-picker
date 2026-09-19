@@ -131,7 +131,9 @@ La ventana principal ("Fondos de pantalla") se organiza en tres zonas:
 - **Monitores**: lista de pantallas conectadas, cada una con el titulo del wallpaper que
   tiene puesto ahora mismo. Clicar una la marca como "pantalla activa" (a la que se aplicara
   el siguiente wallpaper que elijas); lo mismo hacen los chips "MONITOR ACTIVO" arriba del
-  todo en el panel central.
+  todo en el panel central. Junto a los chips hay un combo **"Escalado"** (Rellenar / Ajustar
+  / Estirar / Por defecto de la escena) que se guarda por pantalla y reaplica el wallpaper
+  actual al cambiarlo — usa "Ajustar" si un wallpaper concreto se ve recortado con "Rellenar".
 - **Ajustes**: muestra la ruta detectada de tu biblioteca de Steam y donde se cachean las
   miniaturas.
 
@@ -278,6 +280,8 @@ Todo el estado vive en `~/.config/wallpaperengine-picker/`:
   proceso `linux-wallpaperengine` de esa pantalla (util para ver por que un wallpaper concreto
   no carga o hace crashear el motor).
 - `hidden.json`: lista de ids de wallpapers ocultos.
+- `scaling.json`: modo de escalado por pantalla, `{ "PANTALLA": "fill"|"fit"|"stretch"|"default" }`.
+  "fill" (recorta para rellenar) si una pantalla no tiene entrada.
 - `favorites.json`: lista de ids marcados con favorito (compartida entre la biblioteca local
   y los resultados del Workshop).
 - `recents.json`: ids aplicados recientemente, mas reciente primero (hasta 100), para la
@@ -303,9 +307,9 @@ problema, se regeneran solas).
   C++ no capturadas al parsear un `scene.json` incompatible); con procesos separados, solo se
   cae la pantalla afectada y las demas siguen funcionando. Cambiar el wallpaper de una
   pantalla solo reinicia el proceso de esa pantalla, sin tocar las demas.
-- El escalado se fija en `fill` + `clamp border`, que suele evitar bordes negros o
-  estiramientos raros en la mayoria de resoluciones. Si un wallpaper en concreto se ve mal,
-  puede deberse a que la escena en si no esta pensada para tu resolucion/aspecto.
+- El escalado es configurable por pantalla (combo "Escalado", por defecto "Rellenar"); el
+  `clamp` se deja fijo en `border` siempre. Si un wallpaper en concreto se ve mal incluso con
+  "Ajustar", puede deberse a que la escena en si no esta pensada para tu resolucion/aspecto.
 - Probado sobre Wayland (KWin) usando XWayland para `xrandr`; en un compositor puramente
   wlroots (Sway, Hyprland...) puedes pasar `--layer background` a `linux-wallpaperengine`
   directamente si lo necesitas (no expuesto aun en la interfaz).

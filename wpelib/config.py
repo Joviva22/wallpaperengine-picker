@@ -19,6 +19,9 @@ RECENTS_FILE = os.path.join(CONF_DIR, "recents.json")
 UI_STATE_FILE = os.path.join(CONF_DIR, "ui_state.json")
 PLAYLISTS_FILE = os.path.join(CONF_DIR, "playlists.json")
 KNOWN_BAD_FILE = os.path.join(CONF_DIR, "known_bad.json")
+SCALING_FILE = os.path.join(CONF_DIR, "scaling.json")
+SCALING_MODES = ["fill", "fit", "stretch", "default"]
+DEFAULT_SCALING = "fill"
 MAX_RECENTS = 100
 CACHE_DIR = os.path.expanduser("~/.cache/wallpaperengine-picker/thumbs_v5")
 WORKSHOP_THUMB_CACHE = os.path.expanduser("~/.cache/wallpaperengine-picker/workshop_thumbs")
@@ -219,6 +222,23 @@ def load_playlists():
 def save_playlists(data):
     os.makedirs(CONF_DIR, exist_ok=True)
     with open(PLAYLISTS_FILE, "w", encoding="utf-8") as f:
+        json.dump(data, f, indent=2)
+
+
+def load_scaling():
+    """Modo de escalado guardado por pantalla, { "PANTALLA": "fill"|"fit"|"stretch"|"default" }."""
+    if os.path.isfile(SCALING_FILE):
+        try:
+            with open(SCALING_FILE, encoding="utf-8") as f:
+                return json.load(f)
+        except Exception:
+            return {}
+    return {}
+
+
+def save_scaling(data):
+    os.makedirs(CONF_DIR, exist_ok=True)
+    with open(SCALING_FILE, "w", encoding="utf-8") as f:
         json.dump(data, f, indent=2)
 
 
